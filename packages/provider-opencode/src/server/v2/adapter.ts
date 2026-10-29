@@ -610,8 +610,11 @@ const sameModel = (left: ModelRef, right: ModelRef | undefined) =>
   left.id === right?.id &&
   (left.variant ?? "default") === (right?.variant ?? "default");
 
+/** Plan mode always runs OpenCode's `plan` agent; otherwise the composer's Agent pick, else `build`. */
 const agentFor = (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
-  input.runtimePolicy.interactionMode === "plan" ? "plan" : "build";
+  input.runtimePolicy.interactionMode === "plan"
+    ? "plan"
+    : (getModelSelectionStringOptionValue(input.modelSelection, "agent") ?? "build");
 
 const commandOf = (text: string) => {
   const match = /^\/([^\s/]+)(?:\s+([\s\S]*))?$/.exec(text.trim());

@@ -11,6 +11,25 @@ const MODELS_BODY = `{"location":{"directory":"/project"},"data":[{"id":"step-5-
 
 const PROVIDERS_BODY = `{"location":{"directory":"/project"},"data":[{"id":"opencode-go","integrationID":"opencode-go","name":"OpenCode Go","activation":"enabled","package":"@opencode/ai/providers/openai-compatible","settings":{"apiKey":"sk-demo-not-real","baseURL":"http://127.0.0.1:48990/v1","provider":"opencode-go"}},{"id":"opencode","integrationID":"opencode","name":"OpenCode Zen","activation":"enabled","package":"@opencode/ai/providers/openai-compatible","settings":{"apiKey":"public","baseURL":"https://opencode.ai/zen/v1"}}]}`;
 
+const agent = (id: string, name: string, mode: string, hidden = false) => ({
+  id,
+  name,
+  request: { settings: {}, headers: {}, body: {} },
+  mode,
+  hidden,
+  permissions: [],
+});
+
+const AGENTS_BODY = JSON.stringify({
+  location: { directory: "/project" },
+  data: [
+    agent("build", "Build", "primary"),
+    agent("docs-writer", "docs-writer", "all"),
+    agent("general", "General", "subagent"),
+    agent("title", "Title", "primary", true),
+  ],
+});
+
 const layerServerReplying = (
   bodies: Readonly<Record<string, string>>,
   hanging: ReadonlyArray<string> = [],
@@ -55,7 +74,7 @@ const readCatalog = (
 describe("loadOpenCode2Catalog", () => {
   it.effect("names the provider each listed model came from", () =>
     Effect.gen(function* () {
-      const models = yield* readCatalog({
+      const { models } = yield* readCatalog({
         "/api/model": MODELS_BODY,
         "/api/provider": PROVIDERS_BODY,
       });
@@ -70,9 +89,9 @@ describe("loadOpenCode2Catalog", () => {
     }),
   );
 
-  it.effect("leaves a model unnamed when the provider list fails", () =>
+  it.effect("leaves models unnamed and lists no agents when those reads fail", () =>
     Effect.gen(function* () {
-      const models = yield* readCatalog({ "/api/model": MODELS_BODY });
+      const { models, agents } = yield* readCatalog({ "/api/model": MODELS_BODY });
 
       assert.deepStrictEqual(
         models.map((model) => [`${model.providerID}/${model.id}`, model.providerName]),
@@ -81,6 +100,21 @@ describe("loadOpenCode2Catalog", () => {
           ["opencode/step-5-preview-free", undefined],
         ],
       );
+      assert.deepStrictEqual(agents, []);
+    }),
+  );
+
+  it.effect("lists only the visible primary agents a thread can switch to", () =>
+    Effect.gen(function* () {
+      const { agents } = yield* readCatalog({
+        "/api/model": MODELS_BODY,
+        "/api/agent": AGENTS_BODY,
+      });
+
+      assert.deepStrictEqual(agents, [
+        { id: "build", name: "Build" },
+        { id: "docs-writer", name: "docs-writer" },
+      ]);
     }),
   );
 

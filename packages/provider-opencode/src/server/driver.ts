@@ -26,7 +26,7 @@ import { loadOpenCode2Catalog } from "./openCode2Catalog.ts";
 import {
   checkOpenCodeProviderStatus,
   loadOpenCode2Workspace,
-  makeOpenCode2ModelLoader,
+  makeOpenCode2CatalogLoader,
   makePendingOpenCodeProvider,
   openCode2CommandsToServerProviderSlashCommands,
   openCode2SkillsToServerProviderSkills,
@@ -283,7 +283,7 @@ export const OpenCodeDriver: ProviderDriver<
         Effect.provideService(OpenCode2Server.OpenCode2Server, openCode2Server),
       ),
     });
-    const loadOpenCode2Models = yield* makeOpenCode2ModelLoader(
+    const readOpenCode2Catalog = yield* makeOpenCode2CatalogLoader(
       openCode2Server.withConnection(({ client }) => loadOpenCode2Catalog(client, host.paths.cwd)),
     );
     const listOpenCode2Workspace = (cwd: string) =>
@@ -341,7 +341,7 @@ export const OpenCodeDriver: ProviderDriver<
           effectiveConfig,
           host.paths.cwd,
           runtimeProbe.refresh,
-          loadOpenCode2Models,
+          readOpenCode2Catalog,
         ).pipe(
           Effect.annotateLogs({ providerInstanceId: instanceId }),
           Effect.annotateSpans({ providerInstanceId: instanceId }),

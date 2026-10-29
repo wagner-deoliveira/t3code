@@ -20,7 +20,11 @@ OpenCode 2 converts the shared OpenCode database to its own format the first tim
 runs. Don't run OpenCode 1.x and 2.x side by side on the same machine. Threads you
 started on 1.x continue on 2.x.
 
-Plan mode uses OpenCode's `plan` agent.
+## Agents
+
+Choose one of your OpenCode primary agents under **Agent** in the model options.
+Agents marked `mode: subagent` or `hidden` are not listed. New threads use `build`.
+On OpenCode 2, plan mode always uses the `plan` agent, whichever agent you chose.
 
 ## Local or external server
 

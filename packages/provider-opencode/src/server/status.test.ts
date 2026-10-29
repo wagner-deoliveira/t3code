@@ -21,7 +21,7 @@ import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
 import {
   checkOpenCodeProviderStatus,
   loadOpenCode2Workspace,
-  type OpenCode2Model,
+  type OpenCode2Catalog,
   type OpenCode2Workspace,
 } from "./status.ts";
 import { readOpenCodeGoUsageLimits } from "./usageLimits.ts";
@@ -434,15 +434,17 @@ const makeOpenCodeSettings = (overrides?: Partial<OpenCodeSettings>): OpenCodeSe
     ...overrides,
   });
 
+const EMPTY_CATALOG: OpenCode2Catalog = { models: [], agents: [] };
+
 const checkProvider = Effect.fn("checkProvider")(function* (
   settings: OpenCodeSettings,
   cwd = process.cwd(),
   environment?: NodeJS.ProcessEnv,
   server = replayOpenCodeServer(OPENCODE_1_RESPONSES, settings.serverPassword),
-  openCode2Models: Effect.Effect<
-    ReadonlyArray<OpenCode2Model>,
+  openCode2Catalog: Effect.Effect<
+    OpenCode2Catalog,
     OpenCodeRuntime.OpenCodeRuntimeError
-  > = Effect.succeed([]),
+  > = Effect.succeed(EMPTY_CATALOG),
 ) {
   return yield* Effect.scoped(
     Effect.gen(function* () {
@@ -456,7 +458,7 @@ const checkProvider = Effect.fn("checkProvider")(function* (
         Effect.provideService(HttpClient.HttpClient, server),
         Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, OpenCodeRuntimeTestDouble),
       );
-      return yield* checkOpenCodeProviderStatus(settings, cwd, probe, openCode2Models).pipe(
+      return yield* checkOpenCodeProviderStatus(settings, cwd, probe, openCode2Catalog).pipe(
         Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, serverOwner),
       );
     }),
@@ -498,7 +500,7 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
                   cause,
                 }),
               )
-            : Effect.succeed([]),
+            : Effect.succeed(EMPTY_CATALOG),
         ).pipe(
           Effect.provideService(
             Tracer.Tracer,
@@ -711,7 +713,7 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
                 ),
                 Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, OpenCodeRuntimeTestDouble),
               ),
-              Effect.succeed([]),
+              Effect.succeed(EMPTY_CATALOG),
             ).pipe(Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, owner));
 
             NodeAssert.equal(snapshot.version, "1.14.19");
@@ -732,15 +734,18 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
         process.cwd(),
         undefined,
         undefined,
-        Effect.succeed([
-          { providerID: "opencode", id: "big-pickle", name: "Big Pickle", variants: [] },
-          {
-            providerID: "opencode",
-            id: "space-bunny-free",
-            name: "Space Bunny Free",
-            variants: [{ id: "low" }, { id: "medium" }, { id: "high" }],
-          },
-        ]),
+        Effect.succeed({
+          models: [
+            { providerID: "opencode", id: "big-pickle", name: "Big Pickle", variants: [] },
+            {
+              providerID: "opencode",
+              id: "space-bunny-free",
+              name: "Space Bunny Free",
+              variants: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+            },
+          ],
+          agents: [],
+        }),
       );
 
       NodeAssert.equal(snapshot.status, "ready");
@@ -769,6 +774,45 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
       );
       NodeAssert.equal(runtimeMock.state.sdkClientInputs.length, 0);
     }),
+  );
+
+  it.effect(
+    "offers an OpenCode 2 server's primary agents on every model, defaulting to build",
+    () =>
+      Effect.gen(function* () {
+        runtimeMock.state.versionStdout = "opencode v2.0.18\n";
+        const snapshot = yield* checkProvider(
+          makeOpenCodeSettings(),
+          process.cwd(),
+          undefined,
+          undefined,
+          Effect.succeed({
+            models: [
+              { providerID: "opencode", id: "big-pickle", name: "Big Pickle", variants: [] },
+            ],
+            agents: [
+              { id: "docs-writer", name: "docs-writer" },
+              { id: "build", name: "Build" },
+              { id: "plan", name: "Plan" },
+            ],
+          }),
+        );
+
+        const agent = snapshot.models[0]?.capabilities?.optionDescriptors?.find(
+          (descriptor) => descriptor.id === "agent",
+        );
+        NodeAssert.deepEqual(agent, {
+          id: "agent",
+          label: "Agent",
+          type: "select",
+          options: [
+            { id: "docs-writer", label: "Docs Writer" },
+            { id: "build", label: "Build", isDefault: true },
+            { id: "plan", label: "Plan" },
+          ],
+          currentValue: "build",
+        });
+      }),
   );
 
   it.effect("marks older releases of a family and deprecated models as legacy", () =>
@@ -821,8 +865,8 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
         process.cwd(),
         undefined,
         undefined,
-        Effect.succeed(
-          releases.map(([providerID, id, family, releaseDate, status]) => ({
+        Effect.succeed({
+          models: releases.map(([providerID, id, family, releaseDate, status]) => ({
             providerID,
             id,
             name: id,
@@ -831,7 +875,8 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
             released: Date.parse(releaseDate),
             deprecated: status === "deprecated",
           })),
-        ),
+          agents: [],
+        }),
       );
       NodeAssert.deepEqual(legacySlugs(openCode2.models), expected);
     }),

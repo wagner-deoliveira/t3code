@@ -442,6 +442,50 @@ describe("OpenCode 2 through the orchestrator", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("runs the composer's selected agent, and plan mode's agent over it", () =>
+    Effect.gen(function* () {
+      const name = "opencode2-selected-agent";
+      const cwd = yield* checkpointWorkspace(name);
+      const thread = threadCommands({ name, worktreePath: cwd });
+      const docsWriter: ModelSelection = {
+        ...bigPickle,
+        options: [{ id: "agent", value: "docs-writer" }],
+      };
+      const projection = yield* runScenario({
+        name,
+        threadId: thread.threadId,
+        entries: [
+          ...createdSession(cwd, name),
+
+          out("session.switchAgent", { sessionID: SESSION, agent: "docs-writer" }),
+          reply("session.switchAgent", null),
+          ...instructionsWritten,
+          ...answeredPrompt("DOCS"),
+
+          out("session.get", { sessionID: SESSION }),
+          reply("session.get", sessionInfo(cwd, t3Rules(name), name)),
+          out("agent.list", "<any>"),
+          reply("agent.list", agentList(cwd)),
+          out("session.update", { sessionID: SESSION, permissions: planRules(name) }),
+          reply("session.update", null),
+          out("session.switchAgent", { sessionID: SESSION, agent: "plan" }),
+          reply("session.switchAgent", null),
+          ...answeredPrompt("PLANNED"),
+        ],
+        commands: [
+          thread.create,
+          thread.message("docs", docsWriter),
+          thread.interactionMode("plan-mode", "plan"),
+          thread.message("plan", docsWriter),
+        ],
+      });
+      assert.deepEqual(
+        projection.runs.map((run) => run.status),
+        ["completed", "completed"],
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("forks from an earlier turn before the next turn's user message", () =>
     Effect.gen(function* () {
       const name = "opencode2-fork";

@@ -195,8 +195,25 @@ function inferDefaultVariant(
   return undefined;
 }
 
-function inferDefaultAgent(agents: ReadonlyArray<Agent>): string | undefined {
-  return agents.find((agent) => agent.name === "build")?.name ?? agents[0]?.name ?? undefined;
+/** The composer's Agent select for an OpenCode server's primary agents; `build` is the default. */
+function openCodeAgentDescriptors(
+  agents: ReadonlyArray<{ readonly id: string; readonly name: string }>,
+) {
+  if (agents.length === 0) return [];
+  const defaultAgent = agents.find((agent) => agent.id === "build")?.id ?? agents[0]!.id;
+  return [
+    {
+      id: "agent",
+      label: "Agent",
+      type: "select" as const,
+      options: agents.map((agent) => ({
+        id: agent.id,
+        label: titleCaseSlug(agent.name),
+        ...(agent.id === defaultAgent ? { isDefault: true as const } : {}),
+      })),
+      currentValue: defaultAgent,
+    },
+  ];
 }
 
 const DEFAULT_OPENCODE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
@@ -240,15 +257,9 @@ function openCodeCapabilitiesForModel(input: {
       ? { id: value, label: titleCaseSlug(value), isDefault: true as const }
       : { id: value, label: titleCaseSlug(value) },
   );
-  const primaryAgents = input.agents.filter(
-    (agent) => !agent.hidden && (agent.mode === "primary" || agent.mode === "all"),
-  );
-  const defaultAgent = inferDefaultAgent(primaryAgents);
-  const agentOptions = primaryAgents.map((agent) =>
-    defaultAgent === agent.name
-      ? { id: agent.name, label: titleCaseSlug(agent.name), isDefault: true as const }
-      : { id: agent.name, label: titleCaseSlug(agent.name) },
-  );
+  const primaryAgents = input.agents
+    .filter((agent) => !agent.hidden && (agent.mode === "primary" || agent.mode === "all"))
+    .map((agent) => ({ id: agent.name, name: agent.name }));
   return createModelCapabilities({
     optionDescriptors: [
       ...(variantOptions.length > 0
@@ -262,17 +273,7 @@ function openCodeCapabilitiesForModel(input: {
             },
           ]
         : []),
-      ...(agentOptions.length > 0
-        ? [
-            {
-              id: "agent",
-              label: "Agent",
-              type: "select" as const,
-              options: agentOptions,
-              ...(defaultAgent ? { currentValue: defaultAgent } : {}),
-            },
-          ]
-        : []),
+      ...openCodeAgentDescriptors(primaryAgents),
     ],
   });
 }
@@ -455,6 +456,14 @@ export interface OpenCode2Model extends OpenCodeRelease {
   readonly variants: ReadonlyArray<{ readonly id: string }>;
 }
 
+export interface OpenCode2Catalog {
+  readonly models: ReadonlyArray<OpenCode2Model>;
+  /** Visible primary agents, the ones a thread can switch to. */
+  readonly agents: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+}
+
+const EMPTY_OPENCODE_2_CATALOG: OpenCode2Catalog = { models: [], agents: [] };
+
 // Sub-provider names distinguish overlapping catalog entries.
 function subProviderLabelFor(input: {
   readonly providerID: string;
@@ -466,9 +475,9 @@ function subProviderLabelFor(input: {
     : label;
 }
 
-const catalogFingerprint = (models: ReadonlyArray<OpenCode2Model>) =>
-  models
-    .map((model) =>
+const catalogFingerprint = (catalog: OpenCode2Catalog) =>
+  [
+    ...catalog.models.map((model) =>
       JSON.stringify([
         model.providerID,
         model.id,
@@ -476,36 +485,39 @@ const catalogFingerprint = (models: ReadonlyArray<OpenCode2Model>) =>
         model.providerName,
         model.variants.map((variant) => variant.id).toSorted(),
       ]),
-    )
+    ),
+    // Agents load as lazily as models on a fresh server, so they settle the same way.
+    ...catalog.agents.map((agent) => JSON.stringify(["agent", agent.id, agent.name])),
+  ]
     .toSorted()
     .join("\n");
 
 /** A cold server can list a partial catalog; two agreeing reads reduce that startup race. */
-export const makeOpenCode2ModelLoader = <E>(
-  list: Effect.Effect<ReadonlyArray<OpenCode2Model>, E>,
-) =>
+export const makeOpenCode2CatalogLoader = <E>(list: Effect.Effect<OpenCode2Catalog, E>) =>
   Effect.sync(() => {
-    let lastLoaded: ReadonlyArray<OpenCode2Model> = [];
+    let lastLoaded = EMPTY_OPENCODE_2_CATALOG;
     return Effect.suspend(() => {
       let previous: string | undefined;
-      let latest: ReadonlyArray<OpenCode2Model> = [];
+      let latest = EMPTY_OPENCODE_2_CATALOG;
       return list.pipe(
         Effect.repeat({
-          until: (models) => {
-            if (models.length > 0) latest = models;
-            const fingerprint = models.length > 0 ? catalogFingerprint(models) : undefined;
+          until: (catalog) => {
+            if (catalog.models.length > 0) latest = catalog;
+            const fingerprint = catalog.models.length > 0 ? catalogFingerprint(catalog) : undefined;
             const settled = fingerprint !== undefined && fingerprint === previous;
             previous = fingerprint;
             return settled;
           },
           schedule: Schedule.spaced("250 millis"),
         }),
-        Effect.catch((error) => (latest.length > 0 ? Effect.succeed(latest) : Effect.fail(error))),
+        Effect.catch((error) =>
+          latest.models.length > 0 ? Effect.succeed(latest) : Effect.fail(error),
+        ),
         Effect.timeoutOption("5 seconds"),
         Effect.map((loaded) => {
           // Fresh progress may still be partial, but a warm cache must not freeze slow catalogs.
           if (loaded._tag === "Some") lastLoaded = loaded.value;
-          else if (latest.length > 0) lastLoaded = latest;
+          else if (latest.models.length > 0) lastLoaded = latest;
           return lastLoaded;
         }),
       );
@@ -579,18 +591,21 @@ const OPENCODE_2_PRESENTATION = {
   supportedRuntimeModes: ["approval-required", "auto-accept-edits", "auto", "full-access"],
 } as const;
 
-function openCode2ModelCapabilities(model: OpenCode2Model): ModelCapabilities {
+function openCode2ModelCapabilities(
+  model: OpenCode2Model,
+  agents: OpenCode2Catalog["agents"],
+): ModelCapabilities {
   const variants = model.variants.map((variant) => variant.id);
   const defaultVariant = inferDefaultVariant(model.providerID, variants);
   return createModelCapabilities({
-    optionDescriptors:
-      variants.length === 0
+    optionDescriptors: [
+      ...(variants.length === 0
         ? []
         : [
             {
               id: "variant",
               label: "Reasoning",
-              type: "select",
+              type: "select" as const,
               options: variants.map((id) => ({
                 id,
                 label: titleCaseSlug(id),
@@ -598,7 +613,9 @@ function openCode2ModelCapabilities(model: OpenCode2Model): ModelCapabilities {
               })),
               ...(defaultVariant === undefined ? {} : { currentValue: defaultVariant }),
             },
-          ],
+          ]),
+      ...openCodeAgentDescriptors(agents),
+    ],
   });
 }
 
@@ -606,9 +623,9 @@ const checkOpenCode2 = Effect.fn("checkOpenCode2")(function* (
   settings: OpenCodeSettings,
   version: string,
   checkedAt: string,
-  loadModels: Effect.Effect<ReadonlyArray<OpenCode2Model>, OpenCodeRuntime.OpenCodeRuntimeError>,
+  loadCatalog: Effect.Effect<OpenCode2Catalog, OpenCodeRuntime.OpenCodeRuntimeError>,
 ) {
-  const result = yield* Effect.exit(loadModels);
+  const result = yield* Effect.exit(loadCatalog);
   const probe = (status: "ready" | "warning" | "error", message: string) => ({
     installed: true,
     version,
@@ -636,7 +653,8 @@ const checkOpenCode2 = Effect.fn("checkOpenCode2")(function* (
       probe: probe("error", "OpenCode could not load its model list."),
     });
   }
-  if (result.value.length === 0) {
+  const { models: listed, agents } = result.value;
+  if (listed.length === 0) {
     yield* logDiscoveryFailure({
       phase: "models",
       isExternalServer: settings.serverUrl.trim().length > 0,
@@ -645,7 +663,7 @@ const checkOpenCode2 = Effect.fn("checkOpenCode2")(function* (
   }
   const models = providerModelsFromSettings(
     markOpenCodeLegacy(
-      result.value.map((model) => {
+      listed.map((model) => {
         const subProvider = subProviderLabelFor(model);
         return {
           model: {
@@ -653,7 +671,7 @@ const checkOpenCode2 = Effect.fn("checkOpenCode2")(function* (
             name: model.name,
             ...(subProvider ? { subProvider } : {}),
             isCustom: false,
-            capabilities: openCode2ModelCapabilities(model),
+            capabilities: openCode2ModelCapabilities(model, agents),
           },
           release: model,
         };
@@ -669,10 +687,10 @@ const checkOpenCode2 = Effect.fn("checkOpenCode2")(function* (
     models,
     slashCommands: [COMPACT_SLASH_COMMAND],
     probe:
-      result.value.length > 0
+      listed.length > 0
         ? probe(
             "ready",
-            `OpenCode ${version} lists ${result.value.length} model${result.value.length === 1 ? "" : "s"}.`,
+            `OpenCode ${version} lists ${listed.length} model${listed.length === 1 ? "" : "s"}.`,
           )
         : probe("warning", "OpenCode 2 is running, but it did not list any models yet."),
   });
@@ -682,10 +700,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
   openCodeSettings: OpenCodeSettings,
   cwd: string,
   probeRuntime: Effect.Effect<ProbedOpenCode, OpenCodeRuntime.OpenCodeRuntimeError>,
-  loadOpenCode2Models: Effect.Effect<
-    ReadonlyArray<OpenCode2Model>,
-    OpenCodeRuntime.OpenCodeRuntimeError
-  >,
+  loadOpenCode2Catalog: Effect.Effect<OpenCode2Catalog, OpenCodeRuntime.OpenCodeRuntimeError>,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -758,7 +773,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
   }
   const probed = probedExit.value;
   if (probed.generation === "v2") {
-    return yield* checkOpenCode2(openCodeSettings, probed.version, checkedAt, loadOpenCode2Models);
+    return yield* checkOpenCode2(openCodeSettings, probed.version, checkedAt, loadOpenCode2Catalog);
   }
   if (compareSemverVersions(probed.version, OpenCodeRuntime.MINIMUM_OPENCODE_VERSION) < 0) {
     return buildServerProvider({
