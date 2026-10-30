@@ -11,6 +11,7 @@ import {
 import { boundedSnapshotProjection } from "@t3tools/shared/orchestrationV2BoundedSnapshot";
 import { pendingBackgroundTurnItems } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Cause from "effect/Cause";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
@@ -253,6 +254,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   };
   if (resumeCache?.owner === owner) resumeCache.snapshot = committed;
   const awaitingCompletion = yield* Ref.make(false);
+  const deletedByEvent = yield* Ref.make(false);
   const applyLock = yield* Semaphore.make(1);
   // Save only completed data/cursor updates. A canceled scope must not cache
   // a cursor whose event has not reached the data yet.
@@ -581,6 +583,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     );
 
     if (result._tag === "delete") {
+      yield* Ref.set(deletedByEvent, true);
       yield* setDeleted();
       return;
     }
@@ -938,10 +941,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       ORCHESTRATION_V2_WS_METHODS.subscribeThread,
       Effect.fn("EnvironmentThreadState.makeSubscribeInput")(function* (session) {
         let current = yield* SubscriptionRef.get(state);
-        // A prior definitive miss (or delete event) already cleared this thread.
-        // Park the subscription attempt without opening the socket so we do not
-        // retry forever against a known-missing id.
-        if (current.status === "deleted") {
+        // A delete event already cleared this thread. Park the subscription attempt
+        // without opening the socket so we do not retry forever against a known-missing id.
+        // A thread only missing over HTTP may not exist yet, so it is looked up again below.
+        if (current.status === "deleted" && (yield* Ref.get(deletedByEvent))) {
           return yield* Effect.never;
         }
 
@@ -965,8 +968,19 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               }),
             ),
           );
-          const httpResult: ThreadSnapshotLoader.ThreadSnapshotLoadResult =
+          let httpResult: ThreadSnapshotLoader.ThreadSnapshotLoadResult =
             yield* snapshotLoader.load(prepared, threadId);
+          if (httpResult._tag === "missing") {
+            yield* setDeleted();
+            // A new thread is opened before the server has created it, and nothing
+            // else tells this state that it now exists, so keep looking.
+            let recheckMillis = 500;
+            while (httpResult._tag === "missing") {
+              yield* Effect.sleep(Duration.millis(recheckMillis));
+              recheckMillis = Math.min(recheckMillis * 2, 5_000);
+              httpResult = yield* snapshotLoader.load(prepared, threadId);
+            }
+          }
           switch (httpResult._tag) {
             case "present": {
               if (canLoadHistory && httpResult.history !== undefined) {
@@ -995,10 +1009,6 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               );
               current = yield* SubscriptionRef.get(state);
               break;
-            }
-            case "missing": {
-              yield* setDeleted();
-              return yield* Effect.never;
             }
             case "unavailable": {
               break;
