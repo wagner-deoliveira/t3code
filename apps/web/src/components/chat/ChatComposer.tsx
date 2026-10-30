@@ -303,6 +303,7 @@ export interface ChatComposerHandle {
   ) => boolean;
   openModelPicker: () => void;
   stepReasoningEffort: (direction: 1 | -1) => void;
+  cycleAgent: () => void;
   toggleModelPicker: () => void;
   openControl: (command: KeybindingCommand) => void;
   isModelPickerOpen: () => boolean;
@@ -2772,6 +2773,40 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
   const openModelPickerStable = useStableCallback(openModelPicker);
 
+  const stepComposerOption = (direction: 1 | -1, descriptorId?: "agent") => {
+    if (noProviderAvailable || pendingUserInputs.length > 0 || isEditingQueuedMessage) {
+      return;
+    }
+    const change = getComposerReasoningStep({
+      provider: selectedProvider,
+      instanceId: selectedInstanceId,
+      model: selectedModel,
+      models: selectedProviderModels,
+      modelOptions: composerModelOptions?.[selectedInstanceId],
+      reportedModelSelection,
+      prompt: promptRef.current,
+      cursor: readComposerSnapshotStable().expandedCursor,
+      planModeEnabled: settings.planModeEnabled,
+      direction,
+      ...(descriptorId ? { descriptorId } : {}),
+    });
+    if (!change) return;
+    if (change.modelOptions) {
+      useComposerDraftStore
+        .getState()
+        .setProviderModelOptions(composerDraftTarget, selectedProvider, change.modelOptions, {
+          instanceId: selectedInstanceId,
+          model: selectedModel,
+          persistSticky: true,
+        });
+    }
+    if (change.prompt !== promptRef.current) {
+      applyPromptReplacementStable(0, promptRef.current.length, change.prompt, {
+        expandedCursorAfterReplace: change.cursor,
+      });
+    }
+  };
+
   useImperativeHandle(
     composerRef,
     () => ({
@@ -2813,38 +2848,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           { ensureLeadingBoundary: true, citationCommentAnchor: sourceAnchor },
         ),
       openModelPicker: openModelPickerStable,
-      stepReasoningEffort: (direction) => {
-        if (noProviderAvailable || pendingUserInputs.length > 0 || isEditingQueuedMessage) {
-          return;
-        }
-        const change = getComposerReasoningStep({
-          provider: selectedProvider,
-          instanceId: selectedInstanceId,
-          model: selectedModel,
-          models: selectedProviderModels,
-          modelOptions: composerModelOptions?.[selectedInstanceId],
-          reportedModelSelection,
-          prompt: promptRef.current,
-          cursor: readComposerSnapshotStable().expandedCursor,
-          planModeEnabled: settings.planModeEnabled,
-          direction,
-        });
-        if (!change) return;
-        if (change.modelOptions) {
-          useComposerDraftStore
-            .getState()
-            .setProviderModelOptions(composerDraftTarget, selectedProvider, change.modelOptions, {
-              instanceId: selectedInstanceId,
-              model: selectedModel,
-              persistSticky: true,
-            });
-        }
-        if (change.prompt !== promptRef.current) {
-          applyPromptReplacementStable(0, promptRef.current.length, change.prompt, {
-            expandedCursorAfterReplace: change.cursor,
-          });
-        }
-      },
+      stepReasoningEffort: (direction) => stepComposerOption(direction),
+      cycleAgent: () => stepComposerOption(1, "agent"),
       toggleModelPicker: () => {
         if (isComposerModelPickerOpen) {
           setIsComposerModelPickerOpen(false);

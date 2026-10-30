@@ -34,6 +34,10 @@ To change effort one step without opening the picker, bind
 Both are unbound by default. Increase wraps from the highest level to the
 lowest, and decrease wraps from the lowest level to the highest.
 
+For providers that list agents, such as [OpenCode](./providers-opencode.md#agents),
+bind **Composer: Cycle Agent** to switch to the next agent without opening the
+picker. It has no default shortcut and wraps from the last agent to the first.
+
 In the model picker, press Left in an empty search field or Shift+Tab to reach
 the provider list. Use Up/Down to move and Enter to choose. Right returns to
 model search. `mod+shift+up` and `mod+shift+down` switch providers directly and clear the

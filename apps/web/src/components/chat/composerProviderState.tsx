@@ -177,6 +177,7 @@ export function getComposerReasoningStep(input: {
   cursor: number;
   planModeEnabled: boolean;
   direction: 1 | -1;
+  descriptorId?: "agent";
 }): {
   prompt: string;
   cursor: number;
@@ -200,6 +201,7 @@ export function getComposerReasoningStep(input: {
     prompt,
     planModeEnabled: input.planModeEnabled,
     direction: input.direction,
+    ...(input.descriptorId ? { descriptorId: input.descriptorId } : {}),
   });
   if (!step) return null;
   const modelOptions = "modelOptions" in step ? { modelOptions: step.modelOptions } : {};

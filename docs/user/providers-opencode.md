@@ -26,6 +26,13 @@ Choose one of your OpenCode primary agents under **Agent** in the model options.
 Agents marked `mode: subagent` or `hidden` are not listed. New threads use `build`.
 On OpenCode 2, plan mode always uses the `plan` agent, whichever agent you chose.
 
+## Compaction
+
+OpenCode compacts long conversations itself, and T3 Code has no setting for it.
+Change it in your `opencode.json` under `compaction`: `auto` turns automatic
+compaction on or off, `buffer` sets the token headroom, and `keep.tokens` sets how
+much recent context stays. Send `/compact` to compact a thread yourself.
+
 ## Local or external server
 
 Leave **Server URL** empty to let T3 Code start OpenCode locally. A password in

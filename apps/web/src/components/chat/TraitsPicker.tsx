@@ -247,6 +247,7 @@ export function getReasoningTraitStep(input: {
   prompt: string;
   planModeEnabled: boolean;
   direction: 1 | -1;
+  descriptorId?: "agent";
 }) {
   const selected = getSelectedTraits(
     input.provider,
@@ -257,12 +258,15 @@ export function getReasoningTraitStep(input: {
     true,
     input.planModeEnabled,
   );
-  if (selected.modelIsUnavailable || selected.ultrathinkInBodyText) return null;
+  if (selected.modelIsUnavailable) return null;
+  if (!input.descriptorId && selected.ultrathinkInBodyText) return null;
   const descriptor = selected.selectDescriptors.find((entry) =>
-    REASONING_SELECT_DESCRIPTOR_IDS.has(entry.id),
+    input.descriptorId
+      ? entry.id === input.descriptorId
+      : REASONING_SELECT_DESCRIPTOR_IDS.has(entry.id),
   );
   if (!descriptor || descriptor.options.length < 2) return null;
-  const isPrimary = descriptor.id === selected.primarySelectDescriptor?.id;
+  const isPrimary = !input.descriptorId && descriptor.id === selected.primarySelectDescriptor?.id;
   const current =
     isPrimary && selected.ultrathinkPromptControlled
       ? "ultrathink"
@@ -653,9 +657,9 @@ export const TraitsPicker = memo(function TraitsPicker({
                       ? "min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap sm:max-w-48"
                       : "shrink-0 whitespace-nowrap",
                     triggerClassName,
-                    // Effort reads on from the model name, "Opus 5.5 High", at about the space
-                    // inside the name: this cancels the model chip's end padding and the row gap.
-                    isComposerOwned && (effortWord !== null ? "-ms-1 ps-0" : "-ms-1 ps-0.5"),
+                    // Effort reads on from the model name, "Opus 5.5 High", a little wider than the space
+                    // inside the name: this mostly cancels the model chip's end padding and the row gap.
+                    isComposerOwned && (effortWord !== null ? "-ms-0.5 ps-0" : "-ms-0.5 ps-0.5"),
                     // The word is muted next to the model name and brightens like it on hover.
                     effortWord !== null &&
                       "text-muted-foreground hover:text-foreground data-pressed:text-foreground data-popup-open:text-foreground",
@@ -694,7 +698,7 @@ export const TraitsPicker = memo(function TraitsPicker({
                   // A label, so icon-only footers drop it; compacted rows drop it before the model.
                   data-composer-control-label
                   data-composer-secondary-trait
-                  className="max-w-24 truncate text-xs"
+                  className="max-w-24 truncate text-xs leading-none"
                 >
                   {otherLabels.join(" · ")}
                 </span>

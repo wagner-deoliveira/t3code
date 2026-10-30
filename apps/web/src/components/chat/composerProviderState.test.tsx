@@ -315,6 +315,33 @@ describe("getComposerReasoningStep", () => {
     }
   });
 
+  it("cycles the agent through the catalog without touching effort", () => {
+    const models = modelWith([
+      selectDescriptor("agent", [
+        { id: "build", label: "Build", isDefault: true },
+        { id: "docs", label: "Docs" },
+      ]),
+      selectDescriptor("reasoningEffort", LEVELS),
+    ]);
+    const options = selections(["agent", "build"], ["reasoningEffort", "low"]);
+    expect(
+      step({ models, modelOptions: options, descriptorId: "agent" })?.modelOptions,
+    ).toStrictEqual(selections(["agent", "docs"], ["reasoningEffort", "low"]));
+    expect(
+      step({
+        models,
+        modelOptions: selections(["agent", "docs"], ["reasoningEffort", "low"]),
+        descriptorId: "agent",
+      })?.modelOptions,
+    ).toStrictEqual(options);
+    expect(
+      step({
+        models: modelWith([selectDescriptor("reasoningEffort", LEVELS)]),
+        descriptorId: "agent",
+      }),
+    ).toBeNull();
+  });
+
   it("steps Antigravity's thinking_level like other effort controls", () => {
     expect(
       step({

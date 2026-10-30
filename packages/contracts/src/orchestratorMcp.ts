@@ -170,6 +170,12 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   target: Schema.optional(OrchestratorMcpTarget),
   title: Schema.optional(OrchestratorMcpTitle),
   role: Schema.optional(OrchestratorMcpTaskRole),
+  agent: Schema.optional(
+    TrimmedNonEmptyString.annotate({
+      description:
+        "Agent name from `orchestrator_capabilities`. Its instructions lead the task, and its target, modes, and isolation are defaults your own fields override.",
+    }),
+  ),
   isolation: Schema.optional(
     Schema.Literals(["shared", "worktree"]).annotate({
       description:
@@ -636,6 +642,18 @@ export const OrchestratorMcpCapabilitiesResult = Schema.Struct({
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   providers: Schema.Array(OrchestratorMcpProviderCapability),
+  agents: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        description: Schema.String,
+        providerInstanceId: Schema.optional(ProviderInstanceId),
+        model: Schema.optional(Schema.String),
+      }),
+    ).annotate({
+      description: "Agents the user defined for this project, to pass as `delegate_task.agent`.",
+    }),
+  ),
   features: Schema.Struct({
     appOwnedSubagents: Schema.Boolean,
     asyncPolling: Schema.Boolean,

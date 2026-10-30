@@ -465,6 +465,7 @@ const boxToolkitLayer = (thread: BoxThread) => {
   ).pipe(
     Layer.provide(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
     Layer.provide(NodeCrypto.layer),
+    Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-remote-delegation-test-" })),
     Layer.provide(layerBoxThreads),
     Layer.provide(layerBoxLaunches),
     Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
@@ -597,6 +598,9 @@ const makeLaptop = (
       Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
       Layer.provide(Layer.mock(ThreadLaunch.ThreadLaunchService)({})),
       Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+      Layer.provide(
+        ServerConfig.layerTest(process.cwd(), { prefix: "t3-remote-delegation-here-" }),
+      ),
       Layer.fresh,
     );
     const here = yield* Layer.build(layerHere);

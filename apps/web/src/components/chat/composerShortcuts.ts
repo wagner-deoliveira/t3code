@@ -24,6 +24,9 @@ export function composerShortcutCommands(
     "composer.decreaseEffort": ({ event }) => {
       if (!event.repeat) composerRef.current?.stepReasoningEffort(-1);
     },
+    "composer.cycleAgent": ({ event }) => {
+      if (!event.repeat) composerRef.current?.cycleAgent();
+    },
     "composer.host": openControl(composerRef, "composer.host"),
     "composer.effort": openControl(composerRef, "composer.effort"),
     "composer.mode": openControl(composerRef, "composer.mode"),
