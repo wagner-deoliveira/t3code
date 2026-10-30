@@ -12,6 +12,9 @@ name: Fork release
 # commit is released once. The first install of a fork build is by hand: an older plain
 # 0.1.5 is a higher version than 0.1.5-fork.N.
 #
+# Release notes: the pull requests merged to main since the previous release. Each adds the
+# "## Release notes" section of its description, or its title when it has none.
+#
 # Upstream workflow changes are not taken: the sync restores .github/workflows to the
 # fork's version, which also keeps the default token allowed to push. A merge conflict
 # fails the run; resolve it on a branch, merge that into main, and the next run releases.
@@ -146,11 +149,34 @@ jobs:
         env:
           SHA: ${{ needs.prepare.outputs.sha }}
         run: |
+          previous="$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty')"
+          {
+            if [ -n "$previous" ]; then echo "## What's new since ${previous#v}"; else echo "## What's new"; fi
+            echo
+            shas=""
+            if [ -n "$previous" ]; then
+              shas="$(gh api "repos/$GITHUB_REPOSITORY/compare/$previous...$SHA" --paginate --jq '.commits[].sha')"
+            fi
+            # A pull request with a "## Release notes" section contributes that section; any
+            # other contributes its title.
+            changes="$(gh pr list --state merged --base main --limit 200 --json number,title,body,mergeCommit |
+              jq -r --arg shas "$shas" '
+                ($shas | split("\n")) as $in
+                | sort_by(.number)[]
+                | select(.mergeCommit.oid as $oid | $in | index($oid))
+                | ((.body // "") | capture("(?s)## Release notes[ \\t]*\\r?\\n(?<s>.*?)(\\r?\\n## |$)").s // "" | gsub("^\\s+|\\s+$"; "")) as $s
+                | if $s != "" then $s else "- " + .title end')"
+            if [ -n "$changes" ]; then echo "$changes"; else echo "- Upstream changes only."; fi
+            echo
+            echo "## Install"
+            echo
+            echo "Unsigned Windows build of ${GITHUB_REPOSITORY} at ${SHA:0:10}. Windows may show a SmartScreen warning on first install: choose More info, then Run anyway. An installed fork build updates itself from this release feed."
+          } > release-notes.md
           gh release create "v$VERSION" \
             "release/T3-Code-$VERSION-x64.exe" \
             "release/T3-Code-$VERSION-x64.exe.blockmap" \
             release/latest.yml \
             --target "$SHA" \
             --title "T3 Code $VERSION" \
-            --notes "Unsigned Windows build of ${GITHUB_REPOSITORY} at ${SHA:0:10}. Windows may show a SmartScreen warning on first install: choose More info, then Run anyway." \
+            --notes-file release-notes.md \
             --latest
