@@ -153,6 +153,8 @@ interface ThreadResumeSnapshot {
   readonly sequence: number;
   readonly persisted: boolean;
   readonly acceptsBoundedSnapshots?: boolean;
+  /** A delete event, not a missing snapshot, cleared the thread. */
+  readonly deletedByEvent?: boolean;
 }
 
 interface ThreadResumeCache {
@@ -251,10 +253,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     sequence: initialSequence,
     persisted: retained?.persisted ?? Option.isSome(cached),
     acceptsBoundedSnapshots: canLoadHistory,
+    deletedByEvent: retained?.deletedByEvent === true,
   };
   if (resumeCache?.owner === owner) resumeCache.snapshot = committed;
   const awaitingCompletion = yield* Ref.make(false);
-  const deletedByEvent = yield* Ref.make(false);
+  const deletedByEvent = yield* Ref.make(retained?.deletedByEvent === true);
   const applyLock = yield* Semaphore.make(1);
   // Save only completed data/cursor updates. A canceled scope must not cache
   // a cursor whose event has not reached the data yet.
@@ -273,6 +276,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       state: current,
       sequence,
       acceptsBoundedSnapshots: yield* Ref.get(acceptsBoundedSocketSnapshots),
+      deletedByEvent: yield* Ref.get(deletedByEvent),
       persisted:
         committed.persisted &&
         matchesThreadSnapshot(committed, Option.getOrNull(current.data), sequence, current.history),
@@ -522,7 +526,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       item: EventItem,
     ): readonly [EventApplyResult, EnvironmentThreadState] => {
       if (current.status === "deleted") {
-        return [{ _tag: "noop" }, current];
+        // A delete still has to be recorded: the lookup that cleared this state may be a missing
+        // thread it keeps retrying, and it must not bring the thread back.
+        return [
+          item.event.type === "thread.deleted" ? { _tag: "delete" } : { _tag: "noop" },
+          current,
+        ];
       }
       if (Option.isNone(current.data)) {
         return [
@@ -975,11 +984,28 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             // A new thread is opened before the server has created it, and nothing
             // else tells this state that it now exists, so keep looking.
             let recheckMillis = 500;
-            while (httpResult._tag === "missing") {
+            while (httpResult._tag === "missing" && !(yield* Ref.get(deletedByEvent))) {
               yield* Effect.sleep(Duration.millis(recheckMillis));
               recheckMillis = Math.min(recheckMillis * 2, 5_000);
               httpResult = yield* snapshotLoader.load(prepared, threadId);
             }
+            // Under the apply lock, so a delete from an earlier subscription lands before
+            // or after this, never between the check and the reset.
+            const clearedByEvent = yield* applyLock.withPermits(1)(
+              Effect.gen(function* () {
+                if (yield* Ref.get(deletedByEvent)) return true;
+                // setDeleted ended the sync this attempt began; resume it so the recovered
+                // thread is not live before the socket confirms it, and drop any old error.
+                yield* Ref.set(awaitingCompletion, true);
+                yield* SubscriptionRef.update(state, (current) => ({
+                  ...current,
+                  status: "synchronizing" as const,
+                  error: Option.none(),
+                }));
+                return false;
+              }),
+            );
+            if (clearedByEvent) return yield* Effect.never;
           }
           switch (httpResult._tag) {
             case "present": {
@@ -991,6 +1017,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               // snapshots still go through applyItem (resetHistory).
               yield* applyLock.withPermits(1)(
                 Effect.gen(function* () {
+                  // An older snapshot must not bring back a thread a delete just cleared.
+                  if (yield* Ref.get(deletedByEvent)) return;
                   yield* SubscriptionRef.set(lastSequence, httpResult.snapshot.snapshotSequence);
                   const history: ThreadHistoryMeta =
                     httpResult.history !== undefined
@@ -1007,6 +1035,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                   yield* remember;
                 }),
               );
+              if (yield* Ref.get(deletedByEvent)) return yield* Effect.never;
               current = yield* SubscriptionRef.get(state);
               break;
             }
