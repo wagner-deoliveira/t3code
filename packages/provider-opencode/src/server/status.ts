@@ -492,21 +492,27 @@ const catalogFingerprint = (catalog: OpenCode2Catalog) =>
     .toSorted()
     .join("\n");
 
-/** A cold server can list a partial catalog; two agreeing reads reduce that startup race. */
+// A cold server lists providers in stages a few hundred milliseconds apart: built-ins first,
+// then plugin-discovered models such as a custom OpenAI-compatible endpoint's.
+const CATALOG_STABLE_READS = 5;
+
+/** A cold server lists a partial catalog; reads that agree for about a second settle it. */
 export const makeOpenCode2CatalogLoader = <E>(list: Effect.Effect<OpenCode2Catalog, E>) =>
   Effect.sync(() => {
     let lastLoaded = EMPTY_OPENCODE_2_CATALOG;
     return Effect.suspend(() => {
-      let previous: string | undefined;
+      // A warm catalog that still matches needs no wait.
+      let previous = lastLoaded.models.length > 0 ? catalogFingerprint(lastLoaded) : undefined;
+      let agreeing = previous === undefined ? 0 : CATALOG_STABLE_READS - 1;
       let latest = EMPTY_OPENCODE_2_CATALOG;
       return list.pipe(
         Effect.repeat({
           until: (catalog) => {
             if (catalog.models.length > 0) latest = catalog;
             const fingerprint = catalog.models.length > 0 ? catalogFingerprint(catalog) : undefined;
-            const settled = fingerprint !== undefined && fingerprint === previous;
+            agreeing = fingerprint !== undefined && fingerprint === previous ? agreeing + 1 : 1;
             previous = fingerprint;
-            return settled;
+            return fingerprint !== undefined && agreeing >= CATALOG_STABLE_READS;
           },
           schedule: Schedule.spaced("250 millis"),
         }),
