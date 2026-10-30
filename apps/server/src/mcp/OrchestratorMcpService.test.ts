@@ -1535,66 +1535,118 @@ describe("OrchestratorMcpService provider resolution", () => {
     }),
   );
 
-  it.effect("lists the project's agents and refuses one it does not define", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const workspaceRoot = yield* fileSystem.makeTempDirectoryScoped();
-      const directory = path.join(workspaceRoot, ".agents", "agents");
-      yield* fileSystem.makeDirectory(directory, { recursive: true });
-      yield* fileSystem.writeFileString(
-        path.join(directory, "reviewer.md"),
-        [
-          "---",
-          "description: Reviews diffs",
-          "provider: codex",
-          "model: gpt-5.4",
-          "---",
-          "Review only.",
-        ].join("\n"),
-      );
-      const layerDependencies = Layer.mergeAll(
-        NodeServices.layer,
-        Layer.mock(ThreadManagementService.ThreadManagementService)({
-          hasReceipt: () => Effect.succeed(false),
-          getThreadRecords: () => Effect.succeed(parentProjection([])),
-        }),
-        ServerSettings.layerTest(),
-        providerRegistryLayer([
-          providerSnapshot({
-            instanceId: codexInstanceId,
-            driver: ProviderDriverKind.make("codex"),
-            model: "gpt-5.4",
+  it.effect(
+    "lists the project's agents, refuses an unknown one, and replays after one is removed",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const accepted = yield* Ref.make(false);
+        const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const task = {
+          id: taskId,
+          threadId: parentThreadId,
+          runId: parentRunId,
+          parentNodeId,
+          origin: "app_owned",
+          createdBy: "agent",
+          driver: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          providerThreadId: null,
+          childThreadId,
+          nativeTaskRef: null,
+          prompt: "Review only.\n\nReview.",
+          title: null,
+          model: "gpt-5.4",
+          status: "running",
+          result: null,
+          startedAt: null,
+          completedAt: null,
+        };
+        const workspaceRoot = yield* fileSystem.makeTempDirectoryScoped();
+        const directory = path.join(workspaceRoot, ".agents", "agents");
+        yield* fileSystem.makeDirectory(directory, { recursive: true });
+        yield* fileSystem.writeFileString(
+          path.join(directory, "reviewer.md"),
+          [
+            "---",
+            "description: Reviews diffs",
+            "provider: codex",
+            "model: gpt-5.4",
+            "---",
+            "Review only.",
+          ].join("\n"),
+        );
+        const layerDependencies = Layer.mergeAll(
+          NodeServices.layer,
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            hasReceipt: () => Ref.get(accepted),
+            getThreadRecords: (threadId) =>
+              Ref.get(accepted).pipe(
+                Effect.map((isAccepted) =>
+                  threadId === parentThreadId
+                    ? parentProjection(isAccepted ? [task] : [])
+                    : childProjection,
+                ),
+              ),
+            dispatch: (command) =>
+              Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+                Effect.andThen(Ref.set(accepted, true)),
+                Effect.as({
+                  sequence: 1,
+                  storedEvents: [
+                    {
+                      sequence: 1,
+                      commandId: null,
+                      event: { type: "subagent.updated", payload: task },
+                    },
+                  ],
+                } as never),
+              ),
           }),
-        ]),
-        adapterRegistryLayer([codexInstanceId]),
-        Layer.mock(ProjectService.ProjectService)({
-          getById: () => Effect.succeedSome({ id: projectId, workspaceRoot } as never),
-        }),
-        Layer.mock(SecretRequests.SecretRequests)({}),
-        Layer.mock(RemoteDelegation.RemoteDelegation)({}),
-        Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
-      );
+          ServerSettings.layerTest(),
+          providerRegistryLayer([
+            providerSnapshot({
+              instanceId: codexInstanceId,
+              driver: ProviderDriverKind.make("codex"),
+              model: "gpt-5.4",
+            }),
+          ]),
+          adapterRegistryLayer([codexInstanceId]),
+          Layer.mock(ProjectService.ProjectService)({
+            getById: () => Effect.succeedSome({ id: projectId, workspaceRoot } as never),
+          }),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+        );
 
-      yield* Effect.gen(function* () {
-        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        const capabilities = yield* service.capabilities(scope);
-        assert.deepEqual(capabilities.agents, [
-          {
-            name: "reviewer",
-            description: "Reviews diffs",
-            providerInstanceId: codexInstanceId,
-            model: "gpt-5.4",
-          },
-        ]);
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const capabilities = yield* service.capabilities(scope);
+          assert.deepEqual(capabilities.agents, [
+            {
+              name: "reviewer",
+              description: "Reviews diffs",
+              providerInstanceId: codexInstanceId,
+              model: "gpt-5.4",
+            },
+          ]);
 
-        const unknown = yield* service
-          .delegateTask(scope, { task: "Review.", agent: "planner", clientRequestId: "agent-1" })
-          .pipe(Effect.flip);
-        assert.equal(unknown.code, "invalid_request");
-        assert.isTrue(unknown.message.includes("Defined agents: reviewer."));
-      }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
-    }).pipe(Effect.provide(NodeServices.layer)),
+          const unknown = yield* service
+            .delegateTask(scope, { task: "Review.", agent: "planner", clientRequestId: "agent-1" })
+            .pipe(Effect.flip);
+          assert.equal(unknown.code, "invalid_request");
+          assert.isTrue(unknown.message.includes("Defined agents: reviewer."));
+
+          const request = { task: "Review.", agent: "reviewer", clientRequestId: "agent-2" };
+          const first = yield* service.delegateTask(scope, request);
+          yield* fileSystem.remove(path.join(directory, "reviewer.md"));
+          const retry = yield* service.delegateTask(scope, request);
+          assert.equal(retry.taskId, first.taskId);
+          assert.equal((yield* Ref.get(dispatched)).length, 2);
+        }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("driver-only delegation skips an instance the project turned off", () =>

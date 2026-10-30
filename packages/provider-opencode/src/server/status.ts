@@ -501,9 +501,8 @@ export const makeOpenCode2CatalogLoader = <E>(list: Effect.Effect<OpenCode2Catal
   Effect.sync(() => {
     let lastLoaded = EMPTY_OPENCODE_2_CATALOG;
     return Effect.suspend(() => {
-      // A warm catalog that still matches needs no wait.
-      let previous = lastLoaded.models.length > 0 ? catalogFingerprint(lastLoaded) : undefined;
-      let agreeing = previous === undefined ? 0 : CATALOG_STABLE_READS - 1;
+      let previous: string | undefined;
+      let agreeing = 0;
       let latest = EMPTY_OPENCODE_2_CATALOG;
       return list.pipe(
         Effect.repeat({
@@ -521,7 +520,7 @@ export const makeOpenCode2CatalogLoader = <E>(list: Effect.Effect<OpenCode2Catal
         ),
         Effect.timeoutOption("5 seconds"),
         Effect.map((loaded) => {
-          // Fresh progress may still be partial, but a warm cache must not freeze slow catalogs.
+          // Fresh progress may still be partial, but a cached catalog must not freeze slow ones.
           if (loaded._tag === "Some") lastLoaded = loaded.value;
           else if (latest.models.length > 0) lastLoaded = latest;
           return lastLoaded;

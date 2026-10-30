@@ -50,8 +50,10 @@ same name, the project's wins.
 
 Ask the thread's agent to use one, for example "have the reviewer check this
 branch". The agent sees the project's definitions and delegates with the agent's
-name. Instructions lead the task, and anything the delegating agent sets for the
-task itself wins over the agent's defaults.
+name. Instructions lead the task. The delegating agent can override the provider,
+model, options, runtime mode, interaction mode, and isolation one by one; what it
+leaves unset keeps the agent's default. Options belong to a model, so choosing a
+different provider or model drops the agent's own model and options.
 
 An agent can never run broader than the thread that delegates to it. If the
 definition asks for `full-access` and the thread is supervised, the delegation is
