@@ -72,6 +72,40 @@ describe("applyAgentDefinition", () => {
       isolation: "worktree",
     });
   });
+
+  it("merges the caller's target per field and drops options that belong to another model", () => {
+    const tuned = parseAgentDefinition(
+      "tuned",
+      "---\nprovider: claudeAgent\nmodel: claude-opus-5-5\noptions:\n  effort: high\n  thinking: true\n---\nGo.",
+    )!;
+    const targetFor = (target: NonNullable<OrchestratorMcpDelegateTaskInput["target"]>) =>
+      applyAgentDefinition({ task: "Do it", agent: "tuned", target }, tuned).target;
+
+    expect(targetFor({ options: [{ id: "effort", value: "low" }] })).toStrictEqual({
+      providerInstanceId: "claudeAgent",
+      model: "claude-opus-5-5",
+      options: [
+        { id: "thinking", value: true },
+        { id: "effort", value: "low" },
+      ],
+    });
+    expect(targetFor({ model: "claude-sonnet-5-5" })).toStrictEqual({
+      providerInstanceId: "claudeAgent",
+      model: "claude-sonnet-5-5",
+    });
+    expect(
+      targetFor({ model: "claude-sonnet-5-5", options: [{ id: "effort", value: "low" }] }),
+    ).toStrictEqual({
+      providerInstanceId: "claudeAgent",
+      model: "claude-sonnet-5-5",
+      options: [{ id: "effort", value: "low" }],
+    });
+    expect(targetFor({ options: [] })).toStrictEqual({
+      providerInstanceId: "claudeAgent",
+      model: "claude-opus-5-5",
+      options: [],
+    });
+  });
 });
 
 describe("loadAgentDefinitions", () => {

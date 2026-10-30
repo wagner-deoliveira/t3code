@@ -400,6 +400,7 @@ it("readThread and sendToThread reach threads in other projects", async () => {
                     threadId: input.threadId,
                   }),
                 ),
+          hasReceipt: () => Effect.succeed(false),
           sendToThread: () =>
             Effect.succeed({
               run: { id: "run-foreign", status: "queued" },

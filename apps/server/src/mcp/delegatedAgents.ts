@@ -130,15 +130,55 @@ export const loadAgentDefinitions = Effect.fn("DelegatedAgents.load")(function* 
   );
 });
 
+/**
+ * The caller's provider, model and options win individually. Models belong to a provider and
+ * option ids to a model, so choosing a different provider or model leaves the agent's behind.
+ */
+function mergeTarget(
+  requested: OrchestratorMcpDelegateTaskInput["target"],
+  defaults: AgentDefinition["target"],
+): OrchestratorMcpDelegateTaskInput["target"] {
+  if (defaults === undefined) return requested;
+  if (requested === undefined) return defaults;
+  const providerChanged =
+    requested.driverKind !== undefined ||
+    (requested.providerInstanceId !== undefined &&
+      requested.providerInstanceId !== defaults.providerInstanceId);
+  if (providerChanged) return requested;
+  const modelChanged = requested.model !== undefined && requested.model !== defaults.model;
+  const defaultOptions = modelChanged ? undefined : defaults.options;
+  const options =
+    requested.options === undefined || defaultOptions === undefined
+      ? (requested.options ?? defaultOptions)
+      : requested.options.length === 0
+        ? requested.options
+        : [
+            ...defaultOptions.filter(
+              (option) => !requested.options?.some(({ id }) => id === option.id),
+            ),
+            ...requested.options,
+          ];
+  const model = requested.model ?? defaults.model;
+  return {
+    ...requested,
+    ...(requested.providerInstanceId === undefined && defaults.providerInstanceId !== undefined
+      ? { providerInstanceId: defaults.providerInstanceId }
+      : {}),
+    ...(model === undefined ? {} : { model }),
+    ...(options === undefined ? {} : { options }),
+  };
+}
+
 /** The delegation with the agent's instructions and defaults applied; what the caller passed wins. */
 export function applyAgentDefinition(
   input: OrchestratorMcpDelegateTaskInput,
   agent: AgentDefinition,
 ): OrchestratorMcpDelegateTaskInput {
+  const target = mergeTarget(input.target, agent.target);
   return {
     ...input,
     task: `${agent.instructions}\n\n${input.task}`,
-    ...(input.target === undefined && agent.target !== undefined ? { target: agent.target } : {}),
+    ...(target === undefined ? {} : { target }),
     ...(input.runtimeMode === undefined && agent.runtimeMode !== undefined
       ? { runtimeMode: agent.runtimeMode }
       : {}),

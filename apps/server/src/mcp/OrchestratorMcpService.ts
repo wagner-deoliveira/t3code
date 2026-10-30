@@ -2253,10 +2253,20 @@ const make = Effect.gen(function* () {
             "A local task runs in this thread's project. Omit target.projectId, or pass target.environmentId to run it in that environment's project.",
           );
         }
+        const key = yield* requestKey(requested.clientRequestId);
+        const commandId = stableCommandId({
+          scope,
+          requestKey: key,
+          operation: "delegate-task",
+        });
+        const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
+        // An accepted delegation replays even if its agent file has since gone.
         const agents =
-          requested.agent === undefined ? [] : yield* readAgentDefinitions(parent.thread);
+          requested.agent === undefined || isRetryOfAcceptedDelegation
+            ? []
+            : yield* readAgentDefinitions(parent.thread);
         const agent = agents.find((candidate) => candidate.name === requested.agent);
-        if (requested.agent !== undefined && agent === undefined) {
+        if (requested.agent !== undefined && agent === undefined && !isRetryOfAcceptedDelegation) {
           return yield* failure(
             "invalid_request",
             agents.length === 0
@@ -2279,13 +2289,6 @@ const make = Effect.gen(function* () {
           );
         }
         const providers = yield* loadProviders;
-        const key = yield* requestKey(input.clientRequestId);
-        const commandId = stableCommandId({
-          scope,
-          requestKey: key,
-          operation: "delegate-task",
-        });
-        const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
         const target = yield* resolveTargetRechecking({
           parent,
           target: input.target,

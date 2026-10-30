@@ -1080,3 +1080,21 @@ it.effect("keeps reading a cold OpenCode 2 catalog until plugin-discovered model
     NodeAssert.deepEqual(yield* Fiber.join(loaded), settled);
   }).pipe(Effect.provide(TestClock.layer())),
 );
+
+it.effect("does not settle a restarted OpenCode 2 server on a stale cached catalog", () =>
+  Effect.gen(function* () {
+    // The cached catalog was built-in only; the restarted server lists the plugin's models later.
+    const builtIn = catalogOf("github-copilot");
+    const withPlugin = catalogOf("github-copilot", "signals-cluster");
+    const reads = [builtIn, builtIn, builtIn, builtIn, builtIn];
+    const read = yield* makeOpenCode2CatalogLoader(Effect.sync(() => reads.shift() ?? withPlugin));
+    const first = yield* read.pipe(Effect.forkChild);
+    yield* TestClock.adjust("5 seconds");
+    NodeAssert.deepEqual(yield* Fiber.join(first), builtIn);
+
+    reads.push(builtIn, withPlugin);
+    const second = yield* read.pipe(Effect.forkChild);
+    yield* TestClock.adjust("5 seconds");
+    NodeAssert.deepEqual(yield* Fiber.join(second), withPlugin);
+  }).pipe(Effect.provide(TestClock.layer())),
+);
