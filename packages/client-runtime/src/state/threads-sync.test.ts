@@ -111,7 +111,11 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     readonly hasMoreHistory: boolean;
     readonly latestLocalTurnOrdinal?: number | null;
   };
-  readonly httpSnapshot?: ThreadSnapshotLoadResult | ((call: number) => ThreadSnapshotLoadResult);
+  readonly httpSnapshot?:
+    | ThreadSnapshotLoadResult
+    | ((call: number) => ThreadSnapshotLoadResult | Effect.Effect<ThreadSnapshotLoadResult>);
+  /** Keeps queued items in one chunk, so a buffered item survives a session switch. */
+  readonly preserveInputChunks?: boolean;
   /** The test sends the completion marker itself instead of the fake server sending it first. */
   readonly completionMarker?: boolean;
   readonly resumeCache?: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]>;
@@ -139,12 +143,14 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   const supervisorState = yield* SubscriptionRef.make<SupervisorConnectionState>(
     AVAILABLE_CONNECTION_STATE,
   );
-  const streamFrom = (queue: Queue.Queue<TestThreadInput>) =>
-    Stream.fromQueue(queue).pipe(
-      Stream.mapEffect((input) =>
-        input instanceof Error ? Effect.fail(input) : Effect.succeed(input),
-      ),
-    );
+  const decodeInput = (input: TestThreadInput) =>
+    input instanceof Error ? Effect.fail(input) : Effect.succeed(input);
+  const streamFrom = (queue: Queue.Queue<TestThreadInput>) => {
+    const stream = Stream.fromQueue(queue);
+    return options?.preserveInputChunks === true
+      ? stream.pipe(Stream.mapArrayEffect((chunk) => Effect.forEach(chunk, decodeInput)))
+      : stream.pipe(Stream.mapEffect(decodeInput));
+  };
   const client = {
     [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: (input: {
       readonly afterSequence?: number;
@@ -179,10 +185,13 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   const snapshotLoader = ThreadSnapshotLoader.ThreadSnapshotLoader.of({
     load: (_prepared, threadId) =>
       Ref.updateAndGet(loaderCalls, (count) => count + 1).pipe(
-        Effect.map((call): ThreadSnapshotLoadResult => {
+        Effect.flatMap((call) => {
           const httpSnapshot = threadId === THREAD_ID ? options?.httpSnapshot : undefined;
-          if (httpSnapshot === undefined) return { _tag: "unavailable" };
-          return typeof httpSnapshot === "function" ? httpSnapshot(call) : httpSnapshot;
+          if (httpSnapshot === undefined) {
+            return Effect.succeed<ThreadSnapshotLoadResult>({ _tag: "unavailable" });
+          }
+          const result = typeof httpSnapshot === "function" ? httpSnapshot(call) : httpSnapshot;
+          return Effect.isEffect(result) ? result : Effect.succeed(result);
         }),
       ),
   });
@@ -2042,9 +2051,10 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
-  it.effect("loads a thread that did not exist yet once it is created", () =>
+  it.effect("keeps looking for a thread that does not exist yet, then syncs it", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
+        completionMarker: true,
         httpSnapshot: (call) =>
           call === 1
             ? { _tag: "missing" }
@@ -2053,11 +2063,185 @@ describe("EnvironmentThreads", () => {
       yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
       expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
 
+      yield* TestClock.adjust("5 seconds");
+      const recovered = yield* awaitThreadState(harness.observed, (value) =>
+        Option.isSome(value.data),
+      );
+      expect(recovered.status).toBe("synchronizing");
+      expect(Option.getOrThrow(recovered.data)).toEqual(BASE_PROJECTION);
+
+      yield* Queue.offer(harness.inputs, synchronized());
+      yield* awaitThreadState(harness.observed, (value) => value.status === "live");
+    }),
+  );
+
+  it.effect("keeps looking after a reconnect while the thread is still missing", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        httpSnapshot: (call) =>
+          call <= 2
+            ? { _tag: "missing" }
+            : { _tag: "present", snapshot: { snapshotSequence: 7, projection: BASE_PROJECTION } },
+      });
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+
       yield* harness.replaceSession;
       yield* TestClock.adjust("5 seconds");
       const state = yield* awaitThreadState(harness.observed, (value) => value.status === "live");
 
       expect(Option.getOrThrow(state.data)).toEqual(BASE_PROJECTION);
+    }),
+  );
+
+  it.effect("does not look again for a thread a delete event cleared, even after a remount", () =>
+    Effect.gen(function* () {
+      const resumeCache: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]> = {
+        snapshot: undefined,
+        owner: undefined,
+      };
+      const scope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+        Scope.close(scope, Exit.void),
+      );
+      const first = yield* makeHarness({
+        httpSnapshot: {
+          _tag: "present",
+          snapshot: { snapshotSequence: 7, projection: BASE_PROJECTION },
+        },
+        resumeCache,
+      }).pipe(Effect.provideService(Scope.Scope, scope));
+      yield* awaitThreadState(first.observed, (value) => value.status === "live");
+      yield* Queue.offer(first.inputs, deleted(8));
+      yield* awaitThreadState(first.observed, (value) => value.status === "deleted");
+      yield* Scope.close(scope, Exit.void);
+
+      const remounted = yield* makeHarness({ httpSnapshot: { _tag: "missing" }, resumeCache });
+      yield* awaitThreadState(remounted.observed, (value) => value.status === "deleted");
+      yield* TestClock.adjust("30 seconds");
+
+      expect(yield* Ref.get(remounted.loaderCalls)).toBe(0);
+    }),
+  );
+
+  it.effect("drops an old stream error once a missing thread is found", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        completionMarker: true,
+        httpSnapshot: (call) =>
+          call === 1
+            ? { _tag: "missing" }
+            : call === 2
+              ? { _tag: "unavailable" }
+              : { _tag: "present", snapshot: { snapshotSequence: 7, projection: BASE_PROJECTION } },
+      });
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+
+      yield* TestClock.adjust("500 millis");
+      yield* Queue.offer(harness.inputs, new Error("stream failed"));
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.error));
+
+      yield* TestClock.adjust("1 second");
+      yield* Queue.offer(harness.inputs, synchronized());
+      const state = yield* awaitThreadState(harness.observed, (value) => value.status === "live");
+
+      expect(Option.isNone(state.error)).toBe(true);
+      expect(Option.getOrThrow(state.data)).toEqual(BASE_PROJECTION);
+    }),
+  );
+
+  it.effect("does not resurrect a thread deleted during missing-thread recovery", () =>
+    Effect.gen(function* () {
+      const dispatcher = new Scheduler.MixedScheduler("sync").makeDispatcher();
+      const scheduler: Scheduler.Scheduler = {
+        executionMode: "sync",
+        shouldYield: () => false,
+        makeDispatcher: () => dispatcher,
+      };
+      const markerEntered = yield* Deferred.make<void>();
+      const releaseMarker = yield* Deferred.make<void>();
+      const deletionStarted = yield* Deferred.make<void>();
+      const recoveryStarted = yield* Deferred.make<void>();
+      const recoveryResponse = yield* Deferred.make<ThreadSnapshotLoadResult>();
+
+      const harness = yield* makeHarness({
+        completionMarker: true,
+        preserveInputChunks: true,
+        httpSnapshot: (call) =>
+          call === 1
+            ? { _tag: "unavailable" }
+            : call === 2
+              ? { _tag: "missing" }
+              : Deferred.succeed(recoveryStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(recoveryResponse)),
+                ),
+      }).pipe(Effect.provideService(Scheduler.Scheduler, scheduler));
+
+      yield* SubscriptionRef.changes(harness.subscriptionCount).pipe(
+        Stream.filter((count) => count === 1),
+        Stream.runHead,
+      );
+      dispatcher.flush();
+
+      const semaphore = harness.threadState.semaphore;
+      const withPermit = semaphore.withPermit.bind(semaphore);
+      let gateMarker = true;
+      semaphore.withPermit = (effect) =>
+        Effect.suspend(() => {
+          if (!gateMarker) return withPermit(effect);
+          gateMarker = false;
+          return Deferred.succeed(markerEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseMarker)),
+            Effect.andThen(withPermit(effect)),
+          );
+        });
+
+      const deletion = deleted(8);
+      let sequenceReads = 0;
+      Object.defineProperty(deletion, "sequence", {
+        get: () => {
+          if (++sequenceReads === 2) Deferred.doneUnsafe(deletionStarted, Exit.void);
+          return 8;
+        },
+      });
+
+      yield* Queue.offerAll(harness.inputs, [synchronized(), deletion]);
+      yield* Deferred.await(markerEntered);
+      yield* harness.replaceSession;
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+      yield* TestClock.adjust("500 millis");
+      yield* Deferred.await(recoveryStarted);
+
+      yield* semaphore.take(1);
+      yield* Deferred.succeed(releaseMarker, undefined);
+      dispatcher.flush();
+
+      yield* Deferred.succeed(recoveryResponse, {
+        _tag: "present",
+        snapshot: { snapshotSequence: 7, projection: BASE_PROJECTION },
+      });
+      dispatcher.flush();
+
+      yield* semaphore
+        .release(1)
+        .pipe(
+          Effect.forkChild({ startImmediately: true }),
+          Effect.provideService(Scheduler.Scheduler, scheduler),
+          Effect.flatMap(Fiber.join),
+        );
+      dispatcher.flush();
+
+      expect(yield* Deferred.isDone(deletionStarted)).toBe(true);
+      const state = yield* SubscriptionRef.get(harness.threadState);
+      expect({
+        status: state.status,
+        hasData: Option.isSome(state.data),
+        sequence: state.sequence,
+        subscriptions: yield* SubscriptionRef.get(harness.subscriptionCount),
+      }).toEqual({
+        status: "deleted",
+        hasData: false,
+        sequence: 8,
+        subscriptions: 1,
+      });
     }),
   );
 
