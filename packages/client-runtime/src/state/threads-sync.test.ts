@@ -111,7 +111,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     readonly hasMoreHistory: boolean;
     readonly latestLocalTurnOrdinal?: number | null;
   };
-  readonly httpSnapshot?: ThreadSnapshotLoadResult;
+  readonly httpSnapshot?: ThreadSnapshotLoadResult | ((call: number) => ThreadSnapshotLoadResult);
   /** The test sends the completion marker itself instead of the fake server sending it first. */
   readonly completionMarker?: boolean;
   readonly resumeCache?: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]>;
@@ -178,13 +178,12 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   );
   const snapshotLoader = ThreadSnapshotLoader.ThreadSnapshotLoader.of({
     load: (_prepared, threadId) =>
-      Ref.update(loaderCalls, (count) => count + 1).pipe(
-        Effect.as(
-          threadId === THREAD_ID
-            ? (options?.httpSnapshot ??
-                ({ _tag: "unavailable" } satisfies ThreadSnapshotLoadResult))
-            : ({ _tag: "unavailable" } satisfies ThreadSnapshotLoadResult),
-        ),
+      Ref.updateAndGet(loaderCalls, (count) => count + 1).pipe(
+        Effect.map((call): ThreadSnapshotLoadResult => {
+          const httpSnapshot = threadId === THREAD_ID ? options?.httpSnapshot : undefined;
+          if (httpSnapshot === undefined) return { _tag: "unavailable" };
+          return typeof httpSnapshot === "function" ? httpSnapshot(call) : httpSnapshot;
+        }),
       ),
   });
   const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
@@ -2040,6 +2039,25 @@ describe("EnvironmentThreads", () => {
       expect(yield* Ref.get(harness.savedThreads)).toHaveLength(1);
       yield* Scope.close(scope, Exit.void);
       expect(yield* Ref.get(harness.savedThreads)).toHaveLength(1);
+    }),
+  );
+
+  it.effect("loads a thread that did not exist yet once it is created", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        httpSnapshot: (call) =>
+          call === 1
+            ? { _tag: "missing" }
+            : { _tag: "present", snapshot: { snapshotSequence: 7, projection: BASE_PROJECTION } },
+      });
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
+
+      yield* harness.replaceSession;
+      yield* TestClock.adjust("5 seconds");
+      const state = yield* awaitThreadState(harness.observed, (value) => value.status === "live");
+
+      expect(Option.getOrThrow(state.data)).toEqual(BASE_PROJECTION);
     }),
   );
 
