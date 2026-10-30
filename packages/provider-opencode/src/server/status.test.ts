@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
+import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { beforeEach } from "vite-plus/test";
@@ -21,6 +22,7 @@ import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
 import {
   checkOpenCodeProviderStatus,
   loadOpenCode2Workspace,
+  makeOpenCode2CatalogLoader,
   type OpenCode2Catalog,
   type OpenCode2Workspace,
 } from "./status.ts";
@@ -1050,4 +1052,31 @@ it.effect("reads a fresh OpenCode 2 directory again once its scan has ended", ()
     yield* Deferred.succeed(scanEnded, undefined);
     NodeAssert.deepEqual(yield* Fiber.join(load), scanned);
   }),
+);
+
+const catalogOf = (...providerIDs: ReadonlyArray<string>): OpenCode2Catalog => ({
+  models: providerIDs.map((providerID) => ({
+    providerID,
+    id: "model",
+    name: "Model",
+    variants: [],
+  })),
+  agents: [],
+});
+
+it.effect("keeps reading a cold OpenCode 2 catalog until plugin-discovered models arrive", () =>
+  Effect.gen(function* () {
+    // Built-ins list first and agree for a few reads before the plugin's models land.
+    const reads = [
+      catalogOf("github-copilot"),
+      catalogOf("github-copilot", "amazon-bedrock"),
+      catalogOf("github-copilot", "amazon-bedrock"),
+      catalogOf("github-copilot", "amazon-bedrock"),
+    ];
+    const settled = catalogOf("github-copilot", "amazon-bedrock", "signals-cluster");
+    const read = yield* makeOpenCode2CatalogLoader(Effect.sync(() => reads.shift() ?? settled));
+    const loaded = yield* read.pipe(Effect.forkChild);
+    yield* TestClock.adjust("5 seconds");
+    NodeAssert.deepEqual(yield* Fiber.join(loaded), settled);
+  }).pipe(Effect.provide(TestClock.layer())),
 );
