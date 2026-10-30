@@ -1,0 +1,156 @@
+name: Fork release
+
+# Windows installer releases for this fork, with an update feed.
+#
+# Every day, and on demand, the fork's main takes the latest upstream/main. When main has a
+# commit no release covers yet, the workflow builds an unsigned Windows installer and
+# publishes it as the repository's latest GitHub Release, with latest.yml for the in-app
+# updater. Pushing to main releases too.
+#
+# Version: <upstream base version>-fork.<commit count on main>, for example 0.1.5-fork.3302.
+# It rises with every commit on main, so the updater always offers the newest build, and a
+# commit is released once. The first install of a fork build is by hand: an older plain
+# 0.1.5 is a higher version than 0.1.5-fork.N.
+#
+# Upstream workflow changes are not taken: the sync restores .github/workflows to the
+# fork's version, which also keeps the default token allowed to push. A merge conflict
+# fails the run; resolve it on a branch, merge that into main, and the next run releases.
+# To push merges that need more than the default token, add a SYNC_TOKEN secret (a PAT).
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      sync:
+        description: Merge upstream/main into main first
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Sync and plan
+    if: github.repository != 'pingdotgg/t3code'
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      version: ${{ steps.plan.outputs.version }}
+      sha: ${{ steps.plan.outputs.sha }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Merge upstream
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.sync)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/pingdotgg/t3code.git
+          git fetch --no-tags upstream main
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "main already has upstream/main."
+            exit 0
+          fi
+
+          before="$(git rev-parse HEAD)"
+          if ! git merge --no-ff --no-edit upstream/main; then
+            git merge --abort
+            echo "::error::upstream/main conflicts with main. Merge it on a branch, resolve, and merge that into main."
+            exit 1
+          fi
+
+          git rm -rq .github/workflows
+          git checkout "$before" -- .github/workflows
+          if ! git diff --cached --quiet; then
+            git commit --amend --no-edit
+          fi
+          git push origin HEAD:main
+
+      - name: Plan release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          base="$(node -p "require('./apps/desktop/package.json').version")"
+          version="${base%%-*}-fork.$(git rev-list --count HEAD)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "v$version is already released."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  windows:
+    name: Windows installer (${{ needs.prepare.outputs.version }})
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      # The feed is baked into the installer; the app checks this repository's releases.
+      T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+      T3CODE_DESKTOP_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+
+      - name: Install
+        run: vp install
+
+      - name: Set version
+        shell: bash
+        run: node scripts/update-release-package-versions.ts "$VERSION"
+
+      - name: Build installer
+        run: vp run dist:desktop:win:x64
+
+      - name: Check release files
+        shell: bash
+        run: |
+          ls -la release
+          for file in "release/T3-Code-$VERSION-x64.exe" "release/T3-Code-$VERSION-x64.exe.blockmap" release/latest.yml; do
+            test -f "$file" || { echo "::error::Missing $file"; exit 1; }
+          done
+          grep -q "^version: $VERSION\$" release/latest.yml
+
+      - name: Publish release
+        shell: bash
+        env:
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          gh release create "v$VERSION" \
+            "release/T3-Code-$VERSION-x64.exe" \
+            "release/T3-Code-$VERSION-x64.exe.blockmap" \
+            release/latest.yml \
+            --target "$SHA" \
+            --title "T3 Code $VERSION" \
+            --notes "Unsigned Windows build of ${GITHUB_REPOSITORY} at ${SHA:0:10}. Windows may show a SmartScreen warning on first install: choose More info, then Run anyway." \
+            --latest
