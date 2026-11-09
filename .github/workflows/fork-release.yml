@@ -118,15 +118,59 @@ jobs:
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
 
+  jetbrains:
+    name: JetBrains plugin
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          sparse-checkout: apps/jetbrains
+
+      - name: Setup Node for test fixtures
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+          package-manager-cache: false
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Build and test JetBrains plugin
+        working-directory: apps/jetbrains
+        run: ./gradlew --no-daemon --console=plain --info test buildPlugin
+
+      - name: Upload JetBrains plugin
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fork-jetbrains-plugin
+          path: apps/jetbrains/build/distributions/*.zip
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
   windows:
     name: Windows installer (${{ needs.prepare.outputs.version }})
     needs: prepare
     if: needs.prepare.outputs.build == 'true'
     runs-on: windows-2025
     timeout-minutes: 60
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
-      GH_TOKEN: ${{ github.token }}
       # The feed is baked into the installer; the app checks this repository's releases.
       T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
       T3CODE_DESKTOP_VERSION: ${{ needs.prepare.outputs.version }}
@@ -146,19 +190,6 @@ jobs:
       - name: Install
         run: vp install
 
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "25"
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v5
-
-      - name: Build and test JetBrains plugin
-        working-directory: apps/jetbrains
-        run: .\gradlew.bat --no-daemon test buildPlugin
-
       - name: Set version
         shell: bash
         run: node scripts/update-release-package-versions.ts "$VERSION"
@@ -174,14 +205,53 @@ jobs:
             test -f "$file" || { echo "::error::Missing $file"; exit 1; }
           done
           grep -q "^version: $VERSION\$" release/latest.yml
-          compgen -G "apps/jetbrains/build/distributions/*.zip" >/dev/null || {
+      - name: Upload Windows release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fork-windows-release
+          path: |
+            release/T3-Code-*-x64.exe
+            release/T3-Code-*-x64.exe.blockmap
+            release/latest.yml
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  publish:
+    name: Publish release
+    needs: [prepare, jetbrains, windows]
+    if: needs.prepare.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      SHA: ${{ needs.prepare.outputs.sha }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download Windows release
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: fork-windows-release
+          path: release
+
+      - name: Download JetBrains plugin
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: fork-jetbrains-plugin
+          path: release
+
+      - name: Check release files
+        run: |
+          for file in "release/T3-Code-$VERSION-x64.exe" "release/T3-Code-$VERSION-x64.exe.blockmap" release/latest.yml; do
+            test -f "$file" || { echo "::error::Missing $file"; exit 1; }
+          done
+          grep -q "^version: $VERSION\$" release/latest.yml
+          compgen -G "release/*.zip" >/dev/null || {
             echo "::error::Missing JetBrains plugin"; exit 1;
           }
 
       - name: Publish release
-        shell: bash
-        env:
-          SHA: ${{ needs.prepare.outputs.sha }}
         run: |
           previous="$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty')"
           {
@@ -227,7 +297,7 @@ jobs:
             "release/T3-Code-$VERSION-x64.exe" \
             "release/T3-Code-$VERSION-x64.exe.blockmap" \
             release/latest.yml \
-            apps/jetbrains/build/distributions/*.zip \
+            release/*.zip \
             --target "$SHA" \
             --title "T3 Code $VERSION" \
             --notes-file release-notes.md \
