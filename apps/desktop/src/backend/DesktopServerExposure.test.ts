@@ -202,6 +202,35 @@ describe("DesktopServerExposure", () => {
     ),
   );
 
+  it.effect(
+    "reports the attached server's exposure without overwriting the desktop preference",
+    () =>
+      withHarness(
+        lanNetworkInterfaces,
+        Effect.gen(function* () {
+          const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
+          const settings = yield* DesktopAppSettings.DesktopAppSettings;
+          yield* settings.setServerExposureMode("network-accessible");
+          yield* settings.setTailscaleServe({ enabled: true, port: Option.some(8443) });
+          const state = yield* serverExposure.configureFromSettings({
+            port: 49123,
+            shared: { host: "127.0.0.1", tailscaleServeEnabled: false, tailscaleServePort: 443 },
+          });
+          assert.equal(state.mode, "local-only");
+          assert.isFalse(state.tailscaleServeEnabled);
+          assert.deepEqual(
+            (yield* serverExposure.getAdvertisedEndpoints).map((endpoint) => endpoint.httpBaseUrl),
+            ["http://127.0.0.1:49123/"],
+          );
+          const saved = yield* settings.get;
+          assert.equal(saved.serverExposureMode, "network-accessible");
+          assert.isTrue(saved.tailscaleServeEnabled);
+          assert.equal(saved.tailscaleServePort, 8443);
+          assert.isTrue((yield* serverExposure.setMode("network-accessible")).requiresRelaunch);
+        }),
+      ),
+  );
+
   it.effect("starts local-only, Serve off, when a managed policy keeps clients local", () =>
     withHarness(
       lanNetworkInterfaces,

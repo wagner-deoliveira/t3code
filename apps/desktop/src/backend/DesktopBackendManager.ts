@@ -71,6 +71,7 @@ export interface BackendProcessContext {
 export type DesktopBackendBootstrapDelivery = "fd3" | "stdin";
 
 export interface DesktopBackendStartConfig extends BackendProcessContext {
+  readonly sharedConnection?: boolean;
   readonly args: ReadonlyArray<string>;
   readonly env: Record<string, string | undefined>;
   /** False passes env verbatim, preventing the Windows T3CODE_HOME from leaking into WSL. */
@@ -692,6 +693,13 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
     mutex.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* SubscriptionRef.get(state);
+        if (
+          current.ready &&
+          current.desiredRunning &&
+          Option.isSome(current.config) &&
+          current.config.value.sharedConnection
+        )
+          return;
         if (Option.isSome(current.active)) {
           if (!current.desiredRunning) {
             yield* SubscriptionRef.update(state, (latest) => ({
@@ -720,6 +728,18 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           if (current.desiredRunning) {
             yield* scheduleRestart("failed to generate desktop backend configuration");
           }
+          return;
+        }
+        if (config.value.sharedConnection) {
+          yield* cancelRestart;
+          yield* SubscriptionRef.update(state, (latest) => ({
+            ...latest,
+            desiredRunning: true,
+            ready: true,
+            config,
+            restartAttempt: 0,
+          }));
+          yield* spec.onReady?.(config.value.httpBaseUrl) ?? Effect.void;
           return;
         }
         const entryExists = yield* fileSystem

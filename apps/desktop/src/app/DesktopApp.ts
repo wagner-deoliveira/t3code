@@ -266,6 +266,17 @@ const bootstrap = Effect.gen(function* () {
     yield* logBootstrapInfo("bootstrap backend start requested");
     // WSL-only fallback can change the primary endpoint before readiness.
     const config = yield* primaryBackend.currentConfig;
+    if (Option.isSome(config) && config.value.sharedConnection) {
+      const bootstrap = config.value.bootstrap;
+      yield* serverExposure.configureFromSettings({
+        port: bootstrap.port,
+        shared: {
+          host: bootstrap.host,
+          tailscaleServeEnabled: bootstrap.tailscaleServeEnabled,
+          tailscaleServePort: bootstrap.tailscaleServePort,
+        },
+      });
+    }
     if (
       !environment.isDevelopment &&
       !settings.wslOnly &&

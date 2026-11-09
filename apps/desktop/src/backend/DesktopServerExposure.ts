@@ -278,6 +278,11 @@ export class DesktopServerExposure extends Context.Service<
     readonly backendConfig: Effect.Effect<DesktopServerExposureBackendConfig>;
     readonly configureFromSettings: (input: {
       readonly port: number;
+      readonly shared?: {
+        readonly host: string;
+        readonly tailscaleServeEnabled: boolean;
+        readonly tailscaleServePort: number;
+      };
     }) => Effect.Effect<DesktopServerExposureState>;
     readonly setMode: (
       mode: DesktopServerExposureMode,
@@ -509,13 +514,36 @@ export const make = Effect.gen(function* () {
   const backendConfig = Ref.get(stateRef).pipe(Effect.map(toBackendConfig));
 
   const configureFromSettings = Effect.fn("desktop.serverExposure.configureFromSettings")(
-    function* ({ port }: { readonly port: number }) {
+    function* ({
+      port,
+      shared,
+    }: {
+      readonly port: number;
+      readonly shared?: {
+        readonly host: string;
+        readonly tailscaleServeEnabled: boolean;
+        readonly tailscaleServePort: number;
+      };
+    }) {
       yield* Effect.annotateCurrentSpan({ port });
       const settings = yield* desktopSettings.get;
       const currentNetworkInterfaces = yield* readNetworkInterfaces;
+      const actualSettings = withinPolicy(
+        shared
+          ? {
+              ...settings,
+              serverExposureMode:
+                shared.host === "0.0.0.0" || shared.host === "::"
+                  ? "network-accessible"
+                  : "local-only",
+              tailscaleServeEnabled: shared.tailscaleServeEnabled,
+              tailscaleServePort: shared.tailscaleServePort,
+            }
+          : settings,
+      );
       const resolved = resolveRuntimeState({
-        requestedMode: withinPolicy(settings).serverExposureMode,
-        settings: withinPolicy(settings),
+        requestedMode: actualSettings.serverExposureMode,
+        settings: actualSettings,
         port,
         networkInterfaces: currentNetworkInterfaces,
         advertisedHostOverride: config.desktopLanHostOverride,

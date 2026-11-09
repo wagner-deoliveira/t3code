@@ -17,6 +17,8 @@ import { getLocalStorageItem, setLocalStorageItem, useLocalStorage } from "./hoo
 import { shellEnvironment } from "./state/shell";
 import { useAtomCommand } from "./state/use-atom-command";
 import { readEnvironmentScope } from "./state/session";
+import { splitFilePathPosition } from "@t3tools/shared/fileLinks";
+import { readJetBrainsFileBridge } from "./jetBrainsBridge";
 
 const LAST_EDITOR_KEY = "t3code:last-editor";
 
@@ -82,6 +84,7 @@ export function useOpenInPreferredEditor(
       | PreferredEditorEnvironmentRequiredError
       | PreferredEditorUnavailableError
       | EnvironmentAuthorizationError
+      | Error
     >
   > => {
     if (environmentId === null) {
@@ -102,6 +105,17 @@ export function useOpenInPreferredEditor(
           }),
         ),
       );
+    }
+    const ideBridge = readJetBrainsFileBridge(environmentId, targetPath);
+    if (ideBridge !== null) {
+      try {
+        await ideBridge.openFile(splitFilePathPosition(targetPath));
+        return AsyncResult.success("webstorm" as const);
+      } catch (error) {
+        return AsyncResult.failure(
+          Cause.fail(error instanceof Error ? error : new Error(String(error))),
+        );
+      }
     }
     const editor = resolveAndPersistPreferredEditor(availableEditors);
     if (!editor) {

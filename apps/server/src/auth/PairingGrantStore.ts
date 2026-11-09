@@ -23,6 +23,7 @@ import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import * as AuthPairingLinks from "../persistence/AuthPairingLinks.ts";
+import * as ServerSecretStore from "./ServerSecretStore.ts";
 
 export interface BootstrapGrant {
   readonly method: ServerAuthBootstrapMethod;
@@ -266,6 +267,7 @@ const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   const config = yield* ServerConfig.ServerConfig;
   const pairingLinks = yield* AuthPairingLinks.AuthPairingLinkRepository;
+  const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const seededGrantsRef = yield* Ref.make(new Map<string, StoredBootstrapGrant>());
   const changesPubSub = yield* PubSub.unbounded<BootstrapCredentialChange>();
   const generatePairingToken = Effect.gen(function* () {
@@ -314,12 +316,31 @@ const make = Effect.gen(function* () {
   // Accept tokens derived from the rotating desktop secret; older desktops send only a token.
   const desktopBootstrapSecret = config.desktopBootstrapSecret;
   const mac = yield* Mac.Mac;
-  const consumeRotatingDesktopToken = (credential: string, nowMs: number) =>
-    desktopBootstrapSecret === undefined
-      ? Effect.succeed(false)
-      : isValidDesktopBootstrapToken(desktopBootstrapSecret, credential, nowMs).pipe(
-          Effect.provideService(Mac.Mac, mac),
-        );
+  const consumeRotatingDesktopToken = Effect.fn("PairingGrantStore.consumeDesktopToken")(function* (
+    credential: string,
+    nowMs: number,
+  ) {
+    const shared = yield* secretStore
+      .get("shared-desktop-bootstrap")
+      .pipe(Effect.mapError((cause) => new BootstrapCredentialConsumeError({ cause })));
+    if (
+      Option.isSome(shared) &&
+      (yield* isValidDesktopBootstrapToken(
+        Buffer.from(shared.value).toString("hex"),
+        credential,
+        nowMs,
+      ).pipe(Effect.provideService(Mac.Mac, mac)))
+    )
+      return "shared-local-bootstrap";
+    if (
+      desktopBootstrapSecret &&
+      (yield* isValidDesktopBootstrapToken(desktopBootstrapSecret, credential, nowMs).pipe(
+        Effect.provideService(Mac.Mac, mac),
+      ))
+    )
+      return "desktop-bootstrap";
+    return null;
+  });
 
   if (config.desktopBootstrapToken && desktopBootstrapSecret === undefined) {
     const now = yield* DateTime.now;
@@ -443,11 +464,12 @@ const make = Effect.gen(function* () {
   const consume: PairingGrantStore["Service"]["consume"] = Effect.fn("PairingGrantStore.consume")(
     function* (credential, input) {
       const now = yield* DateTime.now;
-      if (yield* consumeRotatingDesktopToken(credential, now.epochMilliseconds)) {
+      const desktopSubject = yield* consumeRotatingDesktopToken(credential, now.epochMilliseconds);
+      if (desktopSubject) {
         return {
           method: "desktop-bootstrap",
           scopes: AuthStandardClientScopes,
-          subject: "desktop-bootstrap",
+          subject: desktopSubject,
           expiresAt: DateTime.add(now, {
             milliseconds: DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS,
           }),
@@ -631,4 +653,5 @@ const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(PairingGrantStore, make).pipe(
   Layer.provideMerge(AuthPairingLinks.layer),
+  Layer.provideMerge(ServerSecretStore.layer),
 );

@@ -979,7 +979,8 @@ export const make = Effect.gen(function* () {
                       ttl: Duration.hours(1),
                     }
                   : {}),
-                replaceActiveForSubjectAndMethod: grant.method === "desktop-bootstrap",
+                replaceActiveForSubjectAndMethod:
+                  grant.method === "desktop-bootstrap" && grant.subject === "desktop-bootstrap",
                 client: {
                   ...requestMetadata,
                   ...(grant.label ? { label: grant.label } : {}),

@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   run: vi.fn(),
   getPreference: vi.fn(),
   setPreference: vi.fn(),
+  readConnection: vi.fn(),
 }));
 
 vi.mock("react", () => ({ useCallback: (callback: unknown) => callback }));
@@ -20,6 +21,7 @@ vi.mock("./state/use-atom-command", () => ({ useAtomCommand: () => state.run }))
 vi.mock("./state/session", () => ({
   readEnvironmentScope: (environmentId: string, scope: string) =>
     scope === AuthOrchestrationOperateScope && state.allowed.has(environmentId),
+  readPreparedConnection: state.readConnection,
 }));
 vi.mock("./hooks/useLocalStorage", () => ({
   getLocalStorageItem: state.getPreference,
@@ -37,6 +39,7 @@ beforeEach(() => {
   state.run.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   state.getPreference.mockReset().mockReturnValue(null);
   state.setPreference.mockReset();
+  state.readConnection.mockReset().mockReturnValue(null);
 });
 
 it("does not use another environment's grant or change preferences when denied", async () => {
@@ -66,4 +69,41 @@ it("checks revocation and regrant when a retained editor callback is invoked", a
     input: { cwd: "/work/readme.md:5", editor: "vscode" },
   });
   expect(state.setPreference).toHaveBeenCalledTimes(1);
+});
+
+it("opens in the IDE with a position, honors revocation, and reports native failures", async () => {
+  const openFile = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("window", {
+    location: { origin: "http://localhost:6071" },
+    t3JetBrains: { protocolVersion: 1, projectPath: "/work", openFile },
+  });
+  try {
+    state.readConnection.mockReturnValue({
+      httpBaseUrl: "http://localhost:6071",
+      target: { _tag: "PrimaryConnectionTarget" },
+    });
+    state.allowed.add(primary);
+    const open = useOpenInPreferredEditor(primary, []);
+    expect(await open("/work/source.ts:12:4")).toMatchObject({
+      _tag: "Success",
+      value: "webstorm",
+    });
+    expect(openFile).toHaveBeenCalledExactlyOnceWith({
+      path: "/work/source.ts",
+      line: 12,
+      column: 4,
+    });
+    state.allowed.delete(primary);
+    expect((await open("/work/source.ts:12:4"))._tag).toBe("Failure");
+    expect(openFile).toHaveBeenCalledTimes(1);
+    state.allowed.add(primary);
+    openFile.mockRejectedValue(new Error("File not found."));
+    const failed = await open("/work/missing.ts");
+    assert(failed._tag === "Failure");
+    expect(Cause.squash(failed.cause)).toMatchObject({ message: "File not found." });
+    expect(state.run).not.toHaveBeenCalled();
+    expect(state.setPreference).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

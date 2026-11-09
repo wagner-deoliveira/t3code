@@ -3,6 +3,7 @@ import * as NodeOS from "node:os";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as LocalServer from "@t3tools/shared/LocalServer";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -728,6 +729,8 @@ export const make = Effect.gen(function* () {
   const settings = yield* DesktopAppSettings.DesktopAppSettings;
   const mac = yield* Mac.Mac;
   const random = yield* SecureRandom.SecureRandom;
+  const localServer = yield* LocalServer.LocalServer;
+  const processEnvironment = yield* HostProcess.Environment;
   // Random generation yields; serialize it so concurrent backends cannot capture distinct bootstrap secrets.
   const secretRef = yield* SynchronizedRef.make(Option.none<string>());
   const getOrCreateBootstrapSecret = SynchronizedRef.modifyEffect(secretRef, (current) =>
@@ -788,7 +791,7 @@ export const make = Effect.gen(function* () {
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
     );
     const shellEnvironmentPrepared = yield* shellEnvironment.installIntoProcess;
-    return yield* resolvePrimaryStartConfig({
+    const config = yield* resolvePrimaryStartConfig({
       ...shared,
       resourceMonitorPath,
       cliPath,
@@ -797,6 +800,40 @@ export const make = Effect.gen(function* () {
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopServerExposure.DesktopServerExposure, serverExposure),
     );
+    if (environment.isDevelopment) return config;
+    const connection = yield* localServer
+      .ensure({
+        executablePath: config.executablePath,
+        entryPath: config.entryPath,
+        cwd: config.cwd,
+        baseDir: environment.baseDir,
+        bootstrap: config.bootstrap,
+        env: { ...processEnvironment, ...config.env },
+      })
+      .pipe(
+        Effect.mapError((cause) =>
+          PlatformError.systemError({
+            _tag: "Unknown",
+            module: "DesktopBackendConfiguration",
+            method: "sharedServer",
+            cause,
+          }),
+        ),
+      );
+    yield* SynchronizedRef.set(secretRef, Option.some(connection.bootstrapSecret));
+    return {
+      ...config,
+      sharedConnection: true,
+      httpBaseUrl: new URL(connection.origin),
+      bootstrap: {
+        ...config.bootstrap,
+        port: Number(new URL(connection.origin).port || 80),
+        host: connection.host ?? "127.0.0.1",
+        tailscaleServeEnabled: connection.tailscaleServeEnabled ?? false,
+        tailscaleServePort: connection.tailscaleServePort ?? 443,
+        desktopBootstrapSecret: connection.bootstrapSecret,
+      },
+    };
   });
 
   // Resolve on each restart so toggling wsl-only takes effect without recreating the pool.

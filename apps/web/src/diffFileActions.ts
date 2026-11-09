@@ -8,6 +8,7 @@ import {
 
 import { useRightPanelStore } from "./rightPanelStore";
 import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
+import { readJetBrainsFileBridge } from "./jetBrainsBridge";
 
 interface OpenDiffFilePrimaryActionInput {
   readonly threadRef: ScopedThreadRef | null;
@@ -103,10 +104,17 @@ export function openDiffFilePrimaryAction({
   });
   if (!workspaceFilePath) return;
 
+  const targetPath = activeCwd
+    ? resolvePathLinkTarget(workspaceFilePath, activeCwd)
+    : workspaceFilePath;
+  if (threadRef && readJetBrainsFileBridge(threadRef.environmentId, targetPath)) {
+    openInEditor(targetPath);
+    return;
+  }
   if (threadRef) {
     useRightPanelStore.getState().openFile(threadRef, workspaceFilePath);
     return;
   }
 
-  openInEditor(activeCwd ? resolvePathLinkTarget(workspaceFilePath, activeCwd) : workspaceFilePath);
+  openInEditor(targetPath);
 }

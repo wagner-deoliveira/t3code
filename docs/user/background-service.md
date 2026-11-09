@@ -3,6 +3,18 @@
 On Linux and macOS, T3 Code can run as a service for your user so you do not need
 to keep a terminal open.
 
+## Shared desktop and IDE server
+
+The desktop app and JetBrains plugin share one background server per T3 home, normally
+`~/.t3`. Opening either starts or connects to it, and both show the same threads live.
+Closing either client leaves the server running. To stop it, run `t3 shared --stop`;
+add `--base-dir <directory>` if you use a custom T3 home. Stopping interrupts connected
+clients and running turns, so stop it before upgrading the runtime.
+
+This also works on Windows. It does not configure startup at sign-in; after a reboot,
+open either client to start the server again. A WSL desktop backend uses its own Linux
+home and remains separate from a Windows plugin.
+
 ## Manage the service
 
 Install the `t3` CLI first ([Install T3 Code](./install.md#command-line)), then
@@ -92,11 +104,10 @@ Mac logged in and awake for unattended remote access. Installing over SSH while
 nobody is logged in at the Mac's screen can fail at the final start step; the
 service is still installed and will start at the next login.
 
-Windows background services are not supported. To keep a Windows host available
-through T3 Connect, leave the desktop app running with its local environment
-enabled, or keep `t3 serve` running in a terminal. Minimize the desktop app rather
-than closing its last window, which stops its local server. Linking T3 Connect
-does not configure automatic startup at Windows sign-in.
+Windows service installation is not supported. The shared desktop and IDE server
+keeps a Windows host available after its clients close, or you can keep `t3 serve`
+running in a terminal. Linking T3 Connect does not configure automatic startup at
+Windows sign-in.
 
 `t3 up` installs the service when you set up T3 Connect, but the two are managed
 separately. Signing out of T3 Connect does not stop or uninstall the service.

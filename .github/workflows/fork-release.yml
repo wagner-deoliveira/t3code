@@ -1,6 +1,6 @@
 name: Fork release
 
-# Windows installer releases for this fork, with an update feed.
+# Windows installer and JetBrains plugin releases for this fork, with a desktop update feed.
 #
 # Every day, and on demand, the fork's main takes the latest upstream/main. When main has a
 # commit no release covers yet, the workflow builds an unsigned Windows installer and
@@ -146,6 +146,19 @@ jobs:
       - name: Install
         run: vp install
 
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Build and test JetBrains plugin
+        working-directory: apps/jetbrains
+        run: .\gradlew.bat --no-daemon test buildPlugin
+
       - name: Set version
         shell: bash
         run: node scripts/update-release-package-versions.ts "$VERSION"
@@ -161,6 +174,9 @@ jobs:
             test -f "$file" || { echo "::error::Missing $file"; exit 1; }
           done
           grep -q "^version: $VERSION\$" release/latest.yml
+          compgen -G "apps/jetbrains/build/distributions/*.zip" >/dev/null || {
+            echo "::error::Missing JetBrains plugin"; exit 1;
+          }
 
       - name: Publish release
         shell: bash
@@ -186,7 +202,7 @@ jobs:
                 | select(.mergeCommit.oid as $oid | $in | index($oid))
                 | ((.body // "") | capture("(?s)## Release notes[ \\t]*\\r?\\n(?<s>.*?)(\\r?\\n(## |🤖)|$)").s // "" | gsub("^\\s+|\\s+$"; "")) as $s
                 | if $s != "" then $s else "- " + .title end')"
-            if [ -n "$changes" ]; then echo "$changes"; else echo "- Upstream changes only."; fi
+            if [ -n "$changes" ]; then echo "$changes"; else echo "- Updates to T3 Code and its integrations."; fi
             # The app lists the bullets above the "Full changelog" block, in order, and drops
             # everything after it, so the install note stays on the release page only.
             echo
@@ -204,11 +220,14 @@ jobs:
             echo "## Install"
             echo
             echo "Unsigned Windows build of ${GITHUB_REPOSITORY} at ${SHA:0:10}. Windows may show a SmartScreen warning on first install: choose More info, then Run anyway. An installed fork build updates itself from this release feed."
+            echo
+            echo "For WebStorm 2026.3 or later, download the JetBrains plugin ZIP below and use Settings → Plugins → Install Plugin from Disk. Use this matching desktop release, then connect the plugin to the shared server."
           } > release-notes.md
           gh release create "v$VERSION" \
             "release/T3-Code-$VERSION-x64.exe" \
             "release/T3-Code-$VERSION-x64.exe.blockmap" \
             release/latest.yml \
+            apps/jetbrains/build/distributions/*.zip \
             --target "$SHA" \
             --title "T3 Code $VERSION" \
             --notes-file release-notes.md \

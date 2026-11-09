@@ -10,6 +10,8 @@ import * as Scope from "effect/Scope";
 import type * as Electron from "electron";
 
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as LocalServer from "@t3tools/shared/LocalServer";
+import * as Option from "effect/Option";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
@@ -20,6 +22,7 @@ import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
+import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 
 export class DesktopLifecycleRelaunchError extends Schema.TaggedError<DesktopLifecycleRelaunchError>()(
   "DesktopLifecycleRelaunchError",
@@ -221,6 +224,22 @@ export const make = DesktopLifecycle.of({
     yield* Effect.gen(function* () {
       yield* Effect.yieldNow;
       yield* Ref.set(state.quitting, true);
+      if (
+        reason.startsWith("serverExposureMode=") ||
+        reason === "tailscale-serve-enabled" ||
+        reason === "tailscale-serve-disabled"
+      ) {
+        const pool = yield* Effect.serviceOption(DesktopBackendPool.DesktopBackendPool);
+        const localServer = yield* Effect.serviceOption(LocalServer.LocalServer);
+        if (Option.isSome(pool) && Option.isSome(localServer)) {
+          const primary = yield* pool.value.primary;
+          const config = yield* primary.currentConfig;
+          if (Option.isSome(config) && config.value.sharedConnection) {
+            yield* primary.stop();
+            yield* localServer.value.stop(config.value.bootstrap.t3Home ?? environment.baseDir);
+          }
+        }
+      }
       yield* requestDesktopShutdownAndWait();
       if (environment.isDevelopment) {
         yield* electronApp.exit(75);

@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
+import * as ServerSecretStore from "./ServerSecretStore.ts";
 import {
   DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS,
   currentDesktopBootstrapToken,
@@ -47,6 +48,23 @@ const layerPairingGrantStore = (
   );
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("PairingGrantStore.layer", (it) => {
+  it.effect("accepts a shared desktop credential created after the server started", () =>
+    Effect.gen(function* () {
+      const store = yield* PairingGrantStore.PairingGrantStore;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      const secret = new Uint8Array(32).fill(17);
+      const credential = yield* currentDesktopBootstrapToken(
+        Buffer.from(secret).toString("hex"),
+        0,
+      );
+      expect((yield* Effect.flip(store.consume(credential)))._tag).toBe(
+        "UnknownBootstrapCredentialError",
+      );
+      yield* secrets.create("shared-desktop-bootstrap", secret);
+      expect((yield* store.consume(credential)).method).toBe("desktop-bootstrap");
+      expect((yield* store.consume(credential)).scopes).toEqual(AuthStandardClientScopes);
+    }).pipe(Effect.provide(layerPairingGrantStore())),
+  );
   it.effect("accepts lowercase one-time tokens exactly once", () =>
     Effect.gen(function* () {
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;

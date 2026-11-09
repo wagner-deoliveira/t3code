@@ -22,6 +22,8 @@ export const PersistedServerRuntimeState = Schema.Struct({
   startedAt: Schema.String,
   serviceManaged: Schema.optional(Schema.Boolean),
   serverVersion: Schema.optional(Schema.String),
+  tailscaleServeEnabled: Schema.optional(Schema.Boolean),
+  tailscaleServePort: Schema.optional(Schema.Int),
   // The managed policy this server loaded at startup, null for none; absent from older servers.
   managedPolicy: Schema.optional(
     Schema.NullOr(
@@ -65,7 +67,10 @@ export const makePersistedServerRuntimeState = (input: {
   readonly config: Pick<
     ServerConfig.ServerConfig["Service"],
     "host" | "privateNetworkOnly" | "devUrl"
-  >;
+  > &
+    Partial<
+      Pick<ServerConfig.ServerConfig["Service"], "tailscaleServeEnabled" | "tailscaleServePort">
+    >;
   readonly port: number;
   readonly serviceManaged?: boolean;
   readonly managedPolicy?: PersistedServerRuntimeState["managedPolicy"];
@@ -81,6 +86,12 @@ export const makePersistedServerRuntimeState = (input: {
     startedAt: DateTime.formatIso(now),
     ...(input.serviceManaged ? { serviceManaged: true } : {}),
     serverVersion: packageJson.version,
+    ...(input.config.tailscaleServeEnabled === undefined
+      ? {}
+      : { tailscaleServeEnabled: input.config.tailscaleServeEnabled }),
+    ...(input.config.tailscaleServePort === undefined
+      ? {}
+      : { tailscaleServePort: input.config.tailscaleServePort }),
     ...(input.managedPolicy === undefined ? {} : { managedPolicy: input.managedPolicy }),
   }));
 

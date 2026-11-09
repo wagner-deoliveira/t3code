@@ -23,6 +23,7 @@ import {
 } from "./MarkdownFileLink.logic";
 import { reportMarkdownActionFailure } from "./markdownActionFailure";
 import { WorkspaceEntryTooltip } from "./WorkspaceEntryIcon";
+import { readJetBrainsFileBridge } from "../../jetBrainsBridge";
 
 interface MarkdownFileLinkProps {
   environmentId: EnvironmentId | null;
@@ -108,6 +109,10 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
   };
 
   const handleOpenInFilePreview = () => {
+    if (onOpen && environmentId !== null && readJetBrainsFileBridge(environmentId, targetPath)) {
+      handleOpenInEditor();
+      return;
+    }
     if (threadRef && panelPath) {
       onOpenInPanel(panelPath, line);
       return;
@@ -250,7 +255,17 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
       const clicked = await api.contextMenu.show(
         [
           ...(onOpenMedia ? ([{ id: "preview-media", label: "Preview media" }] as const) : []),
-          ...(onOpen ? ([{ id: "open", label: openInEditorMenuLabel }] as const) : []),
+          ...(onOpen
+            ? ([
+                {
+                  id: "open",
+                  label:
+                    environmentId !== null && readJetBrainsFileBridge(environmentId, targetPath)
+                      ? "Open in IDE"
+                      : openInEditorMenuLabel,
+                },
+              ] as const)
+            : []),
           ...(onOpenInBrowser
             ? ([{ id: "open-in-browser", label: "Open in integrated browser" }] as const)
             : []),

@@ -193,6 +193,33 @@ function makeTestInstance(input: MakeInstanceInput) {
 }
 
 describe("DesktopBackendManager", () => {
+  it.effect("attaches to a shared server without spawning or stopping its process", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let readyCount = 0;
+        const config = { ...baseConfig, sharedConnection: true };
+        const instance = yield* makeTestInstance({
+          config,
+          spawnerLayer: Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() => Effect.die("A shared server must not be spawned here.")),
+          ),
+          onReady: Effect.sync(() => {
+            readyCount += 1;
+          }),
+        });
+        yield* instance.start;
+        assert.isTrue((yield* instance.snapshot).ready);
+        assert.isTrue(yield* instance.waitForReady(Duration.seconds(15)));
+        assert.isTrue(Option.isNone((yield* instance.snapshot).activePid));
+        yield* instance.stop();
+        assert.isFalse((yield* instance.snapshot).ready);
+        yield* instance.start;
+        assert.equal(readyCount, 2);
+      }),
+    ),
+  );
+
   it.effect("notifies readiness waiters on HTTP readiness and stop without clock advancement", () =>
     Effect.scoped(
       Effect.gen(function* () {

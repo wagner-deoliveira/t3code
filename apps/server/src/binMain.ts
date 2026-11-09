@@ -5,6 +5,16 @@ import { enableCliCompileCache } from "./cliCompileCache.ts";
 // paths dispatch before the full CLI module graph (seconds of evaluation) loads.
 export async function runCliCommand() {
   const command = process.argv[2];
+  if (command === "__shared-server") {
+    const { openSharedServerControl } = await import("@t3tools/shared/LocalServer");
+    const baseDir = process.argv[process.argv.indexOf("--base-dir") + 1];
+    if (!baseDir) throw new Error("A shared server requires an explicit T3 home.");
+    await openSharedServerControl(baseDir);
+    process.env.T3CODE_SHARED_SERVER = "true";
+    process.argv.splice(2, 1);
+    await runCliCommand();
+    return;
+  }
   // Install the socket guard before importing code that can open outbound connections.
   const { ignoreMacosTypeOfServiceEinval } = await import("./outboundHttp.ts");
   ignoreMacosTypeOfServiceEinval();

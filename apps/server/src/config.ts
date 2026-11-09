@@ -83,6 +83,7 @@ export class ServerConfig extends Context.Service<
     readonly otlpLogsVariable?: string;
     readonly otelEnvironment: OtelEnvironment.OtelEnvironment;
     readonly mode: RuntimeMode;
+    readonly sharedServer?: boolean;
     readonly port: number;
     readonly host: string | undefined;
     /** Set when the host was defaulted to a private-network listener for the service. */

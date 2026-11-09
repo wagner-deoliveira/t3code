@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as LocalServer from "@t3tools/shared/LocalServer";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -32,7 +33,24 @@ const layerShellEnvironment = (prepared = true) =>
   });
 
 const layerBackendConfiguration = (prepared = true) =>
-  DesktopBackendConfiguration.layer.pipe(Layer.provide(layerShellEnvironment(prepared)));
+  DesktopBackendConfiguration.layer.pipe(
+    Layer.provide(layerShellEnvironment(prepared)),
+    Layer.provide(
+      Layer.succeed(LocalServer.LocalServer, {
+        ensure: (input) =>
+          Effect.succeed({
+            version: 1,
+            origin: "http://127.0.0.1:4888",
+            pid: 123,
+            bootstrapSecret: input.bootstrap?.desktopBootstrapSecret ?? "shared-test-secret",
+            host: input.bootstrap?.host ?? "127.0.0.1",
+            tailscaleServeEnabled: input.bootstrap?.tailscaleServeEnabled ?? false,
+            tailscaleServePort: input.bootstrap?.tailscaleServePort ?? 443,
+          }),
+        stop: () => Effect.void,
+      }),
+    ),
+  );
 
 const layerServerExposure = Layer.succeed(DesktopServerExposure.DesktopServerExposure, {
   getState: Effect.die("unexpected getState"),

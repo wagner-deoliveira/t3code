@@ -1,0 +1,24 @@
+<idea-plugin>
+    <id>codes.t3.jetbrains</id>
+    <name>T3 Code</name>
+    <vendor>T3 Code contributors</vendor>
+    <description><![CDATA[
+        Use your existing T3 Code server in a docked IDE panel.
+        Connect to or start a shared background server and see the same threads in the desktop app.
+        Send selected code to a thread draft and open referenced files in your IDE.
+    ]]></description>
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.jcef</depends>
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="T3 Code" anchor="right" factoryClass="codes.t3.jetbrains.T3ToolWindowFactory"
+                    icon="/icons/t3.svg"/>
+        <notificationGroup id="T3 Code" displayType="BALLOON"/>
+    </extensions>
+    <actions>
+        <action id="T3Code.SendSelection" class="codes.t3.jetbrains.SendSelectionAction"
+                text="Send Selection to T3 Code" description="Add the selected code to the current T3 thread draft">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

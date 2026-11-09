@@ -6,6 +6,10 @@ import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as LocalServer from "@t3tools/shared/LocalServer";
+import * as Option from "effect/Option";
+import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
+import type * as DesktopBackendManager from "../backend/DesktopBackendManager.ts";
 
 import type * as Electron from "electron";
 
@@ -227,48 +231,113 @@ describe("DesktopLifecycle", () => {
     }),
   );
 
-  it.effect("relaunches without the app link that launched it", () =>
-    Effect.gen(function* () {
-      const relaunched = yield* Deferred.make<Electron.RelaunchOptions>();
-      const layerEnvironment = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
-        platform: "linux",
-        isDevelopment: false,
-      } as DesktopEnvironment.DesktopEnvironment["Service"]);
-      const layer = DesktopLifecycle.layer.pipe(
-        Layer.provideMerge(
-          layerElectronApp(
-            new Map(),
-            Effect.void,
-            () => Effect.void,
-            (options) => Deferred.succeed(relaunched, options).pipe(Effect.asVoid),
+  it.effect.each([
+    "ordinary-relaunch",
+    "serverExposureMode=network-accessible",
+    "tailscale-serve-enabled",
+  ])(
+    "relaunches without the spent app link, restarting the shared server only for exposure changes (%s)",
+    (reason) =>
+      Effect.gen(function* () {
+        const relaunched = yield* Deferred.make<Electron.RelaunchOptions>();
+        const events: string[] = [];
+        const config: DesktopBackendManager.DesktopBackendStartConfig = {
+          sharedConnection: true,
+          executablePath: "/runtime",
+          entryPath: "/server",
+          cwd: "/isolated/home",
+          args: [],
+          env: {},
+          extendEnv: true,
+          captureOutput: false,
+          bootstrapDelivery: "fd3",
+          httpBaseUrl: new URL("http://127.0.0.1:3773"),
+          preflightFailure: Option.none(),
+          bootstrap: {
+            mode: "desktop",
+            noBrowser: true,
+            port: 3773,
+            host: "127.0.0.1",
+            t3Home: "/isolated/home",
+            desktopBootstrapToken: "test",
+            tailscaleServeEnabled: false,
+            tailscaleServePort: 443,
+          },
+        };
+        const primary: DesktopBackendPool.DesktopBackendInstance = {
+          id: DesktopBackendPool.PRIMARY_INSTANCE_ID,
+          label: Effect.succeed("Test"),
+          start: Effect.void,
+          snapshot: Effect.die("unexpected snapshot"),
+          waitForReady: () => Effect.die("unexpected wait"),
+          currentConfig: Effect.succeedSome(config),
+          stop: () =>
+            Effect.sync(() => {
+              events.push("disconnect");
+            }),
+        };
+        const layerEnvironment = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+          platform: "linux",
+          isDevelopment: false,
+        } as DesktopEnvironment.DesktopEnvironment["Service"]);
+        const layer = DesktopLifecycle.layer.pipe(
+          Layer.provideMerge(
+            Layer.succeed(DesktopBackendPool.DesktopBackendPool, {
+              primary: Effect.succeed(primary),
+              get: () => Effect.die("unexpected get"),
+              list: Effect.die("unexpected list"),
+              register: () => Effect.die("unexpected register"),
+              unregister: () => Effect.die("unexpected unregister"),
+            }),
           ),
-        ),
-        Layer.provideMerge(layerElectronTheme),
-        Layer.provideMerge(layerElectronWindow()),
-        Layer.provideMerge(layerDesktopWindow()),
-        Layer.provideMerge(layerEnvironment),
-        Layer.provideMerge(DesktopShutdown.layer),
-        Layer.provideMerge(DesktopState.layer),
-      );
+          Layer.provideMerge(
+            Layer.succeed(LocalServer.LocalServer, {
+              ensure: () => Effect.die("unexpected start"),
+              stop: (baseDir) =>
+                Effect.sync(() => {
+                  assert.equal(baseDir, "/isolated/home");
+                  events.push("stop-server");
+                }),
+            }),
+          ),
+          Layer.provideMerge(
+            layerElectronApp(
+              new Map(),
+              Effect.void,
+              () => Effect.void,
+              (options) => Deferred.succeed(relaunched, options).pipe(Effect.asVoid),
+            ),
+          ),
+          Layer.provideMerge(layerElectronTheme),
+          Layer.provideMerge(layerElectronWindow()),
+          Layer.provideMerge(layerDesktopWindow()),
+          Layer.provideMerge(layerEnvironment),
+          Layer.provideMerge(DesktopShutdown.layer),
+          Layer.provideMerge(DesktopState.layer),
+        );
 
-      const options = yield* Effect.gen(function* () {
-        const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
-        yield* (yield* DesktopShutdown.DesktopShutdown).markComplete;
-        yield* lifecycle.relaunch("network access changed");
-        return yield* Deferred.await(relaunched);
-      }).pipe(
-        Effect.provide(layer),
-        Effect.provideService(HostProcess.ExecutablePath, "/opt/T3 Code/t3code"),
-        Effect.provideService(HostProcess.Arguments, [
-          "/opt/T3 Code/t3code",
-          "--no-sandbox",
-          "T3CODE://pair?token=spent",
-          "t3code://new?prompt=hello",
-        ]),
-      );
+        const options = yield* Effect.gen(function* () {
+          const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
+          yield* (yield* DesktopShutdown.DesktopShutdown).markComplete;
+          yield* lifecycle.relaunch(reason);
+          return yield* Deferred.await(relaunched);
+        }).pipe(
+          Effect.provide(layer),
+          Effect.provideService(HostProcess.ExecutablePath, "/opt/T3 Code/t3code"),
+          Effect.provideService(HostProcess.Arguments, [
+            "/opt/T3 Code/t3code",
+            "--no-sandbox",
+            "T3CODE://pair?token=spent",
+            "t3code://new?prompt=hello",
+          ]),
+        );
 
-      assert.deepEqual(options, { execPath: "/opt/T3 Code/t3code", args: ["--no-sandbox"] });
-    }),
+        assert.deepEqual(options, { execPath: "/opt/T3 Code/t3code", args: ["--no-sandbox"] });
+        assert.deepEqual(
+          events,
+          reason === "ordinary-relaunch" ? [] : ["disconnect", "stop-server"],
+        );
+      }),
   );
 
   it.effect("exits on a repeated quit only once shutdown has stalled", () =>

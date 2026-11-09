@@ -11,6 +11,7 @@ import {
 } from "@t3tools/shared/dpop";
 import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -452,6 +453,35 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
       }).pipe(
         Effect.provide(layerEnvironmentAuth({ desktopBootstrapToken: "desktop-bootstrap-token" })),
       ),
+    );
+
+    it.effect("keeps independently authenticated shared clients authorized", () =>
+      Effect.gen(function* () {
+        const auth = yield* EnvironmentAuth.EnvironmentAuth;
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        const secret = new Uint8Array(32).fill(17);
+        yield* secrets.create("shared-desktop-bootstrap", secret);
+        const credential = yield* currentDesktopBootstrapToken(
+          Buffer.from(secret).toString("hex"),
+          (yield* DateTime.now).epochMilliseconds,
+        );
+        const desktop = yield* auth.exchangeBootstrapCredentialForAccessToken(
+          credential,
+          undefined,
+          { ...requestMetadata, label: "Desktop" },
+        );
+        const ide = yield* auth.exchangeBootstrapCredentialForAccessToken(credential, undefined, {
+          ...requestMetadata,
+          label: "WebStorm",
+        });
+        expect(
+          (yield* auth.authenticateHttpRequest(makeBearerRequest(desktop.access_token))).subject,
+        ).toBe("shared-local-bootstrap");
+        expect(
+          (yield* auth.authenticateHttpRequest(makeBearerRequest(ide.access_token))).subject,
+        ).toBe("shared-local-bootstrap");
+        expect(yield* auth.listSessions()).toHaveLength(2);
+      }).pipe(Effect.provide(layerEnvironmentAuth())),
     );
 
     it.effect("rotates desktop bearer sessions without accumulating authorized clients", () =>

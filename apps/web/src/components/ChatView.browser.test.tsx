@@ -16,10 +16,11 @@ import { getRouter } from "~/router";
 import {
   ENVIRONMENT_ID,
   PROJECT_ID,
+  dispatchedCommands,
   installFakeEnvironment,
   type FakeDriver,
 } from "../../test/fakeEnvironment";
-import { render } from "../../test/render";
+import { act, render } from "../../test/render";
 
 // The socket is the only fake layer; see test/appScenarios.renders.tsx.
 vi.mock("../../../../packages/client-runtime/src/connection/driver.ts", async (importOriginal) => {
@@ -36,7 +37,7 @@ vi.mock(import("~/rpc/requestLatencyState"), async (original) => ({
   trackRpcRequestSent: () => {},
 }));
 
-it("a new draft does not load its reserved thread before the server lists it", async () => {
+it("keeps a new draft local while accepting an IDE selection", async () => {
   using _environment = installFakeEnvironment([]);
   using fetchSpy = vi.spyOn(globalThis, "fetch");
   __setClientSettingsForTests({
@@ -64,4 +65,41 @@ it("a new draft does not load its reserved thread before the server lists it", a
     .filter((url) => url.includes(`/api/orchestration/threads/${threadId}/`));
   // A 404 here marks the thread deleted, and the view never loads it once the send creates it.
   expect(threadRequests).toEqual([]);
+
+  const previousBridge = window.t3JetBrains;
+  using _bridge = {
+    [Symbol.dispose]: () => {
+      if (previousBridge === undefined) delete window.t3JetBrains;
+      else window.t3JetBrains = previousBridge;
+    },
+  };
+  window.t3JetBrains = {
+    protocolVersion: 1,
+    projectPath: "/workspace/render",
+    openFile: async () => {},
+  };
+  window.dispatchEvent(new Event("t3code:jetbrains-ready"));
+  const client = window.t3JetBrainsClient;
+  if (!client) throw new Error("The mounted composer did not attach the IDE bridge.");
+  await act(() => {
+    useComposerDraftStore.getState().setPrompt(draftId, "Explain this code");
+    client.addSelection({
+      projectPath: "/workspace/render",
+      filePath: "/workspace/render/src/example.ts",
+      text: "const selected = 1;",
+      startLine: 3,
+      endLine: 3,
+      unsaved: true,
+    });
+  });
+  await expect.element(page.getByTestId("composer-editor")).toMatchTextContent("Explain this code");
+  await expect
+    .element(page.getByTestId("composer-editor"))
+    .toMatchTextContent('Unsaved editor snapshot: "src/example.ts", lines 3–3');
+  await expect
+    .element(page.getByTestId("composer-editor"))
+    .toMatchTextContent("const selected = 1;");
+  expect(dispatchedCommands()).toEqual([]);
+  await _app.unmount();
+  expect(window.t3JetBrainsClient).toBeUndefined();
 });
