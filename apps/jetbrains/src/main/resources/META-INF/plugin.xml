@@ -3,10 +3,25 @@
     <name>T3 Code</name>
     <vendor>T3 Code contributors</vendor>
     <description><![CDATA[
-        Use your existing T3 Code server in a docked IDE panel.
+        <p>Use your existing T3 Code server in a docked IDE panel.
         Connect to or start a shared background server and see the same threads in the desktop app.
-        Send selected code to a thread draft and open referenced files in your IDE.
+        Send selected code to a thread draft and open referenced files in your IDE.</p>
+        <h3>Screenshots</h3>
+        <p><b>Connected toolbar</b><br/>
+        Send selection adds editor code to your draft for review before sending.</p>
+        <p><img src="${connectedScreenshot}" width="280" height="41"
+                alt="Shared server connection with Send selection"/></p>
+        <p><b>Connect to the shared server</b></p>
+        <p><img src="${connectScreenshot}" width="280" height="41"
+                alt="Disconnected toolbar with Connect button"/></p>
+        <p><b>Light theme</b></p>
+        <p><img src="${lightScreenshot}" width="420" height="41"
+                alt="Connected toolbar in a light theme"/></p>
     ]]></description>
+    <change-notes><![CDATA[
+        <p>Added toolbar screenshots to the plugin's Overview and README.
+        The Overview images are included in the plugin and work offline.</p>
+    ]]></change-notes>
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.jcef</depends>
     <extensions defaultExtensionNs="com.intellij">

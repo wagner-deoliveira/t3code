@@ -4,11 +4,29 @@ The plugin runs T3 Code in a tool window. It shares one background server with t
 app, so both show the same projects, threads, approvals, and checkpoints. It can connect or
 start that server without opening the desktop window.
 
+## Screenshots
+
+These screenshots are also available in **Settings → Plugins → T3 Code → Overview** after
+installing plugin 0.4.1 or later. The Overview images are included in the plugin and work offline.
+
+Connected in WebStorm. **Send selection** adds selected editor code to the current thread's
+draft for review before sending.
+
+![T3 Code in WebStorm with a shared server connection and Send selection action](screenshots/shared-server.png)
+
+The toolbar before connecting:
+
+![Disconnected T3 Code toolbar with a Connect button](screenshots/connect.png)
+
+The connected toolbar in a light theme:
+
+![Light T3 Code toolbar with a shared server connection and Send selection action](screenshots/light-theme.png)
+
 ## Install and connect
 
 1. In WebStorm 2026.3 or later, open **Settings → Plugins → gear → Install Plugin from Disk**.
    Download the plugin ZIP from the fork's matching GitHub Release and select it, then restart
-   if prompted. For a local build, select `build/distributions/t3-code-jetbrains-0.4.0.zip`.
+   if prompted. For a local build, select `build/distributions/t3-code-jetbrains-0.4.1.zip`.
 2. Open **View → Tool Windows → T3 Code** and click **Connect**. The plugin
    finds a T3 CLI with shared-server support, reuses the server for your T3 home or starts
    one in the background, and pairs the panel automatically.
