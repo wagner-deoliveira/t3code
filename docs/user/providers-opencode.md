@@ -28,13 +28,6 @@ On OpenCode 2, plan mode always uses the `plan` agent, whichever agent you chose
 
 ## Compaction
 
-OpenCode compacts long conversations itself, and T3 Code has no setting for it.
-Change it in your `opencode.json` under `compaction`: `auto` turns automatic
-compaction on or off, `buffer` sets the token headroom, and `keep.tokens` sets how
-much recent context stays. Send `/compact` to compact a thread yourself.
-
-## Compaction
-
 OpenCode compacts long conversations itself, and T3 Code has no setting for it. On
 OpenCode 2, change it under `compaction` in an OpenCode configuration file, such as
 `opencode.json`: `auto` turns
