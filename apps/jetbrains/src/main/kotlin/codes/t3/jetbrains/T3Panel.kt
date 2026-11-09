@@ -20,71 +20,43 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.jcef.JBCefApp
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefJSQuery
+import com.intellij.util.ui.JBUI
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.handler.CefLoadHandlerAdapter
 import org.cef.handler.CefRequestHandlerAdapter
 import org.cef.network.CefRequest
 import java.awt.BorderLayout
-import java.awt.FlowLayout
+import java.awt.Color
+import java.awt.Component
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
-import javax.swing.JButton
 import javax.swing.JComponent
+import javax.swing.JMenuItem
 import javax.swing.JPanel
+import javax.swing.JPopupMenu
 
 internal class T3Panel(private val project: Project) : JPanel(BorderLayout()), Disposable {
     private val gson = Gson()
-    private val urlField = JBTextField(project.service<T3Settings>().state.serverUrl)
-    private val status = JBLabel("Connect to T3, then open a thread for this project.")
     private val managed = project.service<T3ManagedServer>()
-    private val serverStatus = JBLabel()
-    private val startButton = JButton("Connect shared server")
-    private val stopButton = JButton("Disconnect")
+    private val toolbar = T3Toolbar(
+        { startServer() },
+        { SendSelectionAction.send(project) },
+        { showConnectionMenu(it) },
+        { JBUI.scale(it) },
+    )
+    private var serverState = ServerState(ServerPhase.STOPPED, "Connect to T3, then open a thread for this project.")
+    private var loaded = false
+    private var sharedConnection = false
+    private var connectionDetail = serverState.message
     private var disposed = false
     private var trustedUrl: URI? = null
     private var browser: JBCefBrowser? = null
     private var query: JBCefJSQuery? = null
 
     init {
-        val controls = JPanel(BorderLayout(0, 4))
-        urlField.toolTipText = "T3 server URL or a fresh pairing URL"
-        controls.add(urlField, BorderLayout.NORTH)
-        val buttons = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
-        buttons.add(JButton("Connect").apply { addActionListener { connect() } })
-        buttons.add(JButton("Send selection").apply {
-            addActionListener { SendSelectionAction.send(project) }
-        })
-        controls.add(buttons, BorderLayout.SOUTH)
-        val serverButtons = JPanel(java.awt.GridLayout(2, 2, 4, 4))
-        startButton.addActionListener { startServer() }
-        stopButton.addActionListener {
-            trustedUrl = null
-            browser?.loadURL("about:blank")
-            status.text = "Disconnected from T3."
-            stopButton.isEnabled = false
-            managed.stop()
-        }
-        serverButtons.add(startButton)
-        serverButtons.add(stopButton)
-        serverButtons.add(JButton("Server setup…").apply {
-            addActionListener { ServerSetupDialog(project).show() }
-        })
-        serverButtons.add(JButton("Server log").apply {
-            addActionListener {
-                object : DialogWrapper(project) {
-                    init { title = "T3 Code Server Log"; init() }
-                    override fun createCenterPanel(): JComponent = JBScrollPane(
-                        JBTextArea(managed.logs().ifBlank { "No server output yet." }, 20, 80).apply { isEditable = false },
-                    )
-                }.show()
-            }
-        })
-        controls.add(serverButtons, BorderLayout.CENTER)
-        add(controls, BorderLayout.NORTH)
-        add(JPanel(java.awt.GridLayout(0, 1)).apply { add(serverStatus); add(status) }, BorderLayout.SOUTH)
-        urlField.addActionListener { connect() }
+        add(toolbar, BorderLayout.NORTH)
         if (JBCefApp.isSupported()) {
             initializeBrowser()
         } else {
@@ -93,23 +65,105 @@ internal class T3Panel(private val project: Project) : JPanel(BorderLayout()), D
         managed.listen(this, { state ->
             ApplicationManager.getApplication().invokeLater {
                 if (!disposed && !project.isDisposed) {
-                    serverStatus.text = state.message
-                    startButton.isEnabled = browser != null && state.phase in listOf(ServerPhase.STOPPED, ServerPhase.FAILED)
-                    stopButton.isEnabled = trustedUrl != null || state.phase in listOf(ServerPhase.STARTING, ServerPhase.RUNNING)
+                    serverState = state
+                    refreshToolbar()
                     if (state.phase == ServerPhase.FAILED) notify(project, state.message, true)
                 }
             }
         }, { uri ->
             ApplicationManager.getApplication().invokeLater {
-                if (!disposed && !project.isDisposed) connect(uri)
+                if (!disposed && !project.isDisposed) {
+                    sharedConnection = true
+                    connect(uri)
+                }
             }
         })
         if (browser != null && project.service<T3Settings>().state.autoStartServer && !managed.isActive()) startServer()
+        refreshToolbar()
+    }
+
+    private fun refreshToolbar() {
+        val connecting = serverState.phase == ServerPhase.STARTING || (trustedUrl != null && !loaded)
+        val failed = sharedConnection && serverState.phase == ServerPhase.FAILED
+        val connected = loaded && trustedUrl != null && !failed && !connecting
+        toolbar.showConnection(
+            when {
+                failed -> "Connection failed"
+                serverState.phase == ServerPhase.STOPPING && trustedUrl == null -> "Disconnecting…"
+                connecting -> "Connecting…"
+                connected -> if (sharedConnection) "Shared server" else "Connected"
+                else -> "Disconnected"
+            },
+            trustedUrl?.let(BridgePolicy::persistentUrl),
+            if (trustedUrl == null || failed) serverState.message else connectionDetail,
+            connected,
+            connecting || (serverState.phase == ServerPhase.STOPPING && trustedUrl == null),
+            failed,
+            browser != null && !managed.isActive(),
+            connected && trustedUrl?.let(BridgePolicy::supportsEditorBridge) == true,
+        )
+    }
+
+    private fun showConnectionMenu(anchor: Component) {
+        JPopupMenu().apply {
+            fun action(label: String, enabled: Boolean = true, run: () -> Unit) {
+                add(JMenuItem(label).apply {
+                    isEnabled = enabled
+                    addActionListener { run() }
+                })
+            }
+            trustedUrl?.let { add(JMenuItem(BridgePolicy.persistentUrl(it)).apply { isEnabled = false }); addSeparator() }
+            action("Connect shared server", browser != null && !managed.isActive()) { startServer() }
+            action("Connect to URL…", browser != null) { showConnectionDialog() }
+            action("Disconnect", trustedUrl != null || managed.isActive()) {
+                trustedUrl = null
+                loaded = false
+                browser?.loadURL("about:blank")
+                managed.stop()
+                refreshToolbar()
+            }
+            addSeparator()
+            action("Server setup…") { ServerSetupDialog(project).show() }
+            action("Server log") {
+                object : DialogWrapper(project) {
+                    init { title = "T3 Code Server Log"; init() }
+                    override fun createCenterPanel(): JComponent = JBScrollPane(
+                        JBTextArea(managed.logs().ifBlank { "No server output yet." }, 20, 80).apply { isEditable = false },
+                    )
+                }.show()
+            }
+            show(anchor, (anchor.width - preferredSize.width).coerceAtMost(0), anchor.height)
+        }
+    }
+
+    private fun showConnectionDialog() {
+        object : DialogWrapper(project) {
+            private val url = JBTextField(project.service<T3Settings>().state.serverUrl, 40)
+            init { title = "Connect to T3"; setOKButtonText("Connect"); init() }
+            override fun getPreferredFocusedComponent(): JComponent = url
+            override fun createCenterPanel(): JComponent = JPanel(BorderLayout(0, JBUI.scale(8))).apply {
+                add(JBLabel("Server URL or a fresh pairing URL"), BorderLayout.NORTH)
+                add(url, BorderLayout.CENTER)
+                add(JBLabel("Complete pairing in T3 after connecting."), BorderLayout.SOUTH)
+            }
+            override fun doOKAction() {
+                try {
+                    val uri = BridgePolicy.connectionUrl(url.text)
+                    managed.stop()
+                    sharedConnection = false
+                    connect(uri)
+                    super.doOKAction()
+                } catch (error: Exception) {
+                    setErrorText(error.message ?: "Could not connect.")
+                }
+            }
+        }.show()
     }
 
     private fun startServer() {
         try {
             require(browser != null) { "JCEF is unavailable. Use the bundled JetBrains Runtime." }
+            sharedConnection = true
             managed.start()
         } catch (error: Exception) {
             notify(project, error.message ?: "Could not start the server.", true)
@@ -132,6 +186,20 @@ internal class T3Panel(private val project: Project) : JPanel(BorderLayout()), D
                 }
                 val request = JsonParser.parseString(message).asJsonObject
                 when (request.get("type")?.asString) {
+                    "appearance" -> {
+                        fun color(name: String): Color {
+                            val value = request.get(name)?.asString.orEmpty()
+                            require(Regex("^#[0-9a-fA-F]{6}$").matches(value)) { "Invalid toolbar color." }
+                            return Color.decode(value)
+                        }
+                        val colors = ToolbarColors(
+                            color("background"), color("foreground"), color("muted"), color("accent"),
+                            color("border"), color("primary"), color("primaryForeground"),
+                        )
+                        ApplicationManager.getApplication().invokeLater {
+                            if (!disposed && !project.isDisposed) toolbar.applyColors(colors)
+                        }
+                    }
                     "openFile" -> {
                         val root = project.basePath ?: error("Open a project directory first.")
                         val path = BridgePolicy.resolveProjectFile(Path.of(root), request.get("path").asString)
@@ -161,10 +229,22 @@ internal class T3Panel(private val project: Project) : JPanel(BorderLayout()), D
             override fun onLoadEnd(cefBrowser: CefBrowser, frame: CefFrame, httpStatusCode: Int) {
                 val trusted = trustedUrl ?: return
                 if (!frame.isMain || !BridgePolicy.sameOrigin(frame.url, trusted)) return
+                ApplicationManager.getApplication().invokeLater {
+                    if (!disposed && !project.isDisposed && trustedUrl == trusted) {
+                        loaded = true
+                        connectionDetail = if (BridgePolicy.supportsEditorBridge(trusted)) {
+                            "Open a T3 thread for ${project.name} to share a selection."
+                        } else {
+                            "Remote T3 connected. Editor integration requires a local server."
+                        }
+                        refreshToolbar()
+                    }
+                }
                 if (!BridgePolicy.supportsEditorBridge(trusted)) return
                 val root = project.basePath ?: return
                 val request = jsQuery.inject("JSON.stringify(payload)", "response => resolve()", "(code, message) => reject(new Error(message))")
                 cefBrowser.executeJavaScript("""
+                    (() => {
                     window.t3JetBrains = {
                       protocolVersion: 1,
                       projectPath: ${gson.toJson(root)},
@@ -174,10 +254,34 @@ internal class T3Panel(private val project: Project) : JPanel(BorderLayout()), D
                       })
                     };
                     window.dispatchEvent(new Event("t3code:jetbrains-ready"));
+                    window.t3JetBrainsThemeObserver?.disconnect();
+                    const syncToolbar = () => {
+                      const style = getComputedStyle(document.documentElement);
+                      const canvas = document.createElement("canvas");
+                      canvas.width = canvas.height = 1;
+                      const context = canvas.getContext("2d");
+                      const color = (token, background) => {
+                        context.clearRect(0, 0, 1, 1);
+                        context.fillStyle = background;
+                        context.fillRect(0, 0, 1, 1);
+                        context.fillStyle = style.getPropertyValue(token).trim();
+                        context.fillRect(0, 0, 1, 1);
+                        return "#" + [...context.getImageData(0, 0, 1, 1).data].slice(0, 3)
+                          .map(value => value.toString(16).padStart(2, "0")).join("");
+                      };
+                      const background = color("--background", "#000000");
+                      const payload = {type: "appearance", background};
+                      for (const [name, token] of Object.entries({
+                        foreground: "--foreground", muted: "--muted-foreground", accent: "--accent",
+                        border: "--border", primary: "--primary", primaryForeground: "--primary-foreground",
+                      })) payload[name] = color(token, background);
+                      new Promise((resolve, reject) => { $request }).catch(() => {});
+                    };
+                    window.t3JetBrainsThemeObserver = new MutationObserver(syncToolbar);
+                    window.t3JetBrainsThemeObserver.observe(document.documentElement, {attributes: true, attributeFilter: ["class", "style"]});
+                    syncToolbar();
+                    })();
                 """.trimIndent(), frame.url, 0)
-                ApplicationManager.getApplication().invokeLater {
-                    if (!project.isDisposed) status.text = "Connected. Open a T3 thread for ${project.name} to share a selection."
-                }
             }
         }, web.cefBrowser)
         web.jbCefClient.addRequestHandler(object : CefRequestHandlerAdapter() {
@@ -204,28 +308,18 @@ internal class T3Panel(private val project: Project) : JPanel(BorderLayout()), D
         }, web.cefBrowser)
     }
 
-    private fun connect() {
-        try {
-            val uri = BridgePolicy.connectionUrl(urlField.text)
-            managed.stop()
-            connect(uri)
-        } catch (error: Exception) {
-            notify(project, error.message ?: "Could not connect.", true)
-        }
-    }
-
     private fun connect(uri: URI) {
         val web = browser ?: error("JCEF is unavailable. Use the bundled JetBrains Runtime.")
         trustedUrl = uri
-        stopButton.isEnabled = true
+        loaded = false
         val persistentUrl = BridgePolicy.persistentUrl(uri)
         project.service<T3Settings>().state.serverUrl = persistentUrl
-        urlField.text = persistentUrl
-        status.text = if (BridgePolicy.supportsEditorBridge(uri)) {
+        connectionDetail = if (BridgePolicy.supportsEditorBridge(uri)) {
             "Connecting… Complete T3 pairing, then open a thread for this project."
         } else {
             "Remote T3 connected in this panel. Selection sharing and IDE navigation currently require a local server."
         }
+        refreshToolbar()
         web.loadURL(uri.toString())
     }
 

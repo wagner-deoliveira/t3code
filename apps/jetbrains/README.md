@@ -8,11 +8,11 @@ start that server without opening the desktop window.
 
 1. In WebStorm 2026.3 or later, open **Settings → Plugins → gear → Install Plugin from Disk**.
    Download the plugin ZIP from the fork's matching GitHub Release and select it, then restart
-   if prompted. For a local build, select `build/distributions/t3-code-jetbrains-0.3.0.zip`.
-2. Open **View → Tool Windows → T3 Code** and click **Connect shared server**. The plugin
+   if prompted. For a local build, select `build/distributions/t3-code-jetbrains-0.4.0.zip`.
+2. Open **View → Tool Windows → T3 Code** and click **Connect**. The plugin
    finds a T3 CLI with shared-server support, reuses the server for your T3 home or starts
    one in the background, and pairs the panel automatically.
-3. If no runtime is found, use **Server setup** to choose `t3.exe` (or `t3` on macOS/Linux).
+3. If no runtime is found, open the toolbar's **…** menu and use **Server setup** to choose `t3.exe` (or `t3` on macOS/Linux).
    You can also select a Node/Electron executable and an absolute path to a built T3 CLI
    script such as `apps/server/dist/bin.mjs`. The installed desktop CLI's known Windows shim
    is supported and resolves to its bundled runtime without opening the desktop app.
@@ -46,13 +46,13 @@ and launch the desktop with the same `T3CODE_HOME` if both clients should see th
 To stop the background server explicitly, run `t3 shared --stop`. For a custom home, add
 `--base-dir "C:\path\to\home"`. Stopping interrupts all clients and any running turns.
 Stop it before upgrading its runtime. Changing desktop sharing settings also restarts it;
-click **Connect shared server** again in the IDE afterward.
+click **Connect** again in the IDE afterward.
 
 Pairing credentials are hidden from **Server log** and are not stored in IDE settings.
 The full server log lives at `<T3 home>/userdata/logs/shared-server.log`.
 
-To connect to a server you run separately, paste its browser URL or a fresh pairing URL into
-the connection field and click **Connect**. Complete T3's normal pairing flow.
+To connect to a server you run separately, choose **Connect to URL** from the toolbar's **…**
+menu and paste its browser URL or a fresh pairing URL. Complete T3's normal pairing flow.
 
 Select code and use **Send Selection to T3 Code** from the editor's context menu, **Tools**, or
 **Find Action**. The panel's **Send selection** button does the same. The code, relative file path,
