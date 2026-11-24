@@ -393,6 +393,7 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
           parentRunId: wake.id,
           parentNodeId: wake.rootNodeId!,
           task: "Do the next round",
+          agent: "bb-8",
           modelSelection,
           runtimeMode: "full-access",
           interactionMode: "default",
@@ -401,6 +402,10 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
         const delegated = (yield* orchestrator.getThreadProjection(threadId)).subagents.find(
           (task) => task.runId === wake.id,
         )!;
+        // The child's first message names its agent, so its composer and turn start see it.
+        const child = yield* orchestrator.getThreadProjection(delegated.childThreadId!);
+        assert.deepEqual(child.messages[0]?.context, { version: 1, agent: "bb-8", records: [] });
+        assert.equal(child.messages[0]?.text, "Do the next round");
         yield* orchestrator.dispatch({
           type: "run.interrupt",
           commandId: CommandId.make("stop-wake-interrupt"),

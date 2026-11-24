@@ -1674,6 +1674,8 @@ export default function ChatView(props: ChatViewProps) {
   const timelineMessages = timelineEntries.flatMap((entry) =>
     entry.kind === "message" ? [entry.message] : [],
   );
+  const threadAgent =
+    timelineMessages.findLast((message) => message.role === "user")?.context?.agent ?? null;
   const timelineEmpty = timelineEntries.length === 0 && !hasStreamedTimelineRows;
   const displayedTimelineKey = activeThreadKey ?? routeThreadKey;
   const displayedThreadRef = parseScopedThreadKey(displayedTimelineKey);
@@ -3112,6 +3114,7 @@ export default function ChatView(props: ChatViewProps) {
     draftId,
     draftThread,
     activeThread,
+    threadAgent,
     activeThreadKey,
     activeThreadBranch,
     activeProject,
@@ -3848,6 +3851,7 @@ export default function ChatView(props: ChatViewProps) {
                                 draftId={draftId}
                                 activeThreadId={activeThreadId}
                                 activeThread={activeThread}
+                                threadAgent={threadAgent}
                                 activeThreadRuns={serverProjection?.runs ?? EMPTY_RUNS}
                                 promptHistoryEntries={timelineEntries}
                                 forceExpandedOnMobile={

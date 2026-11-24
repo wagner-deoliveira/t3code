@@ -3030,6 +3030,7 @@ const make = Effect.gen(function* () {
                 parentNodeId,
                 task: taskPrompt(input),
                 ...(input.title === undefined ? {} : { title: input.title }),
+                ...(agent === undefined ? {} : { agent: agent.name }),
                 modelSelection: target.modelSelection,
                 runtimeMode,
                 interactionMode,

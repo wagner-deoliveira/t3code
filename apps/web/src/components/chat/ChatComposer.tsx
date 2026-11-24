@@ -391,6 +391,8 @@ export interface ChatComposerProps {
 
   activeThreadId: ThreadId | null;
   activeThread: Thread | undefined;
+  /** The named agent of the thread's latest message, or null for Default. */
+  threadAgent: string | null;
   activeThreadRuns: ReadonlyArray<OrchestrationV2Run>;
   promptHistoryEntries: ReadonlyArray<TimelineEntry>;
   forceExpandedOnMobile: boolean;
@@ -3645,6 +3647,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         environmentId={environmentId}
         thread={scopeThreadRef(environmentId, activeThread.id)}
         cwd={gitCwd}
+        threadAgent={props.threadAgent}
         onPickAgent={pickComposerAgent}
       />
     ) : null;

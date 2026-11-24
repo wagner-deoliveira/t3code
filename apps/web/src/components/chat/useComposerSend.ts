@@ -3,7 +3,7 @@ import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m } from "~/i18n/messages";
 import { isClearComposerCommand, parseSideChatCommand } from "@t3tools/shared/composerTrigger";
 import { readWorktreeBaseBranch } from "../../worktreeRepositoryChoiceStore";
-import { readComposerAgent } from "../../composerAgentStore";
+import { readComposerAgentPick, resolveComposerAgent } from "../../composerAgentStore";
 import { armFreshSession, disarmFreshSession, readFreshSessionArm } from "./freshSessionArms";
 import {
   mergeDirectPreviewAnnotation,
@@ -206,6 +206,8 @@ interface ComposerSendInput {
   readonly draftId: DraftId | null;
   readonly draftThread: DraftSessionState | null;
   readonly activeThread: EnvironmentThreadShell | undefined;
+  /** The named agent of the thread's latest message, or null for Default. */
+  readonly threadAgent: string | null;
   readonly activeThreadKey: string | null;
   readonly activeThreadBranch: string | null;
   readonly activeProject: EnvironmentProject | null;
@@ -309,6 +311,7 @@ export function useComposerSend(input: ComposerSendInput) {
     draftId,
     draftThread,
     activeThread,
+    threadAgent,
     activeThreadKey,
     activeThreadBranch,
     activeProject,
@@ -1040,7 +1043,10 @@ export function useComposerSend(input: ComposerSendInput) {
     // Records bind attachments by the id each side knows: the local id for the optimistic
     // row, the upload id (or local id on the data-URL path) on the wire; the server
     // rebinds them to the persisted id.
-    const agentForSend = readComposerAgent(scopeThreadRef(environmentId, threadIdForSend));
+    const agentForSend = resolveComposerAgent(
+      readComposerAgentPick(scopeThreadRef(environmentId, threadIdForSend)),
+      threadAgent,
+    );
     const buildOutgoingMessageContext = (attachmentIds: ReadonlyArray<string>) =>
       buildMessageContext({
         terminalContexts: composerTerminalContextsSnapshot,

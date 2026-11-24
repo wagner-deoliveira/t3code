@@ -3780,6 +3780,8 @@ export const OrchestrationV2Command = Schema.Union([
     parentNodeId: NodeId,
     task: TrimmedNonEmptyString,
     title: Schema.optional(TrimmedNonEmptyString),
+    /** The named agent the child talks as; its first message carries it like a chat pick. */
+    agent: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
     modelSelection: ModelSelection,
     runtimeMode: RuntimeMode,
     interactionMode: ProviderInteractionMode,

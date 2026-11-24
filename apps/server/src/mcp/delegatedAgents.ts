@@ -174,7 +174,10 @@ function mergeTarget(
   };
 }
 
-/** The delegation with the agent's instructions and defaults applied; what the caller passed wins. */
+/**
+ * The delegation with the agent's defaults applied; what the caller passed wins. The instructions
+ * reach the child at turn start, from the agent its first message names.
+ */
 export function applyAgentDefinition(
   input: OrchestratorMcpDelegateTaskInput,
   agent: AgentDefinition,
@@ -182,7 +185,6 @@ export function applyAgentDefinition(
   const target = mergeTarget(input.target, agent.target);
   return {
     ...input,
-    task: `${agent.instructions}\n\n${input.task}`,
     ...(target === undefined ? {} : { target }),
     ...(input.runtimeMode === undefined && agent.runtimeMode !== undefined
       ? { runtimeMode: agent.runtimeMode }

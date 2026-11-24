@@ -3074,6 +3074,11 @@ describe("OrchestratorMcpService provider resolution", () => {
 
           const request = { task: "Review.", agent: "reviewer", clientRequestId: "agent-2" };
           const first = yield* service.delegateTask(scope, request);
+          // The child's first message names the agent; turn start gives it the instructions once.
+          assert.deepInclude((yield* Ref.get(dispatched))[0], {
+            task: "Review.",
+            agent: "reviewer",
+          });
           yield* fileSystem.remove(path.join(directory, "reviewer.md"));
           const retry = yield* service.delegateTask(scope, request);
           assert.equal(retry.taskId, first.taskId);
