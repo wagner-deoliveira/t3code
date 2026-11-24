@@ -76,6 +76,12 @@ compaction, a failed turn, a provider switch, or another agent in between sends 
 messages join a running turn and carry no instructions. Picking an agent changes the composer's
 model, never the thread's permissions, plan mode, or checkout.
 
+`delegate_task` with `agent` takes the same path, so the instructions are never sent twice. The
+child's first message names the agent instead of quoting the instructions, and turn start sends
+them once. A follow-up in that thread names the same agent and skips them. Clients show a
+thread's agent from its latest user message, so a delegated child or another device's pick opens
+on the right agent. This device's own pick, including Default, overrides it.
+
 ## Cross-provider traps and testing
 
 Prove adapter behavior with replay fixtures recorded from the real provider and replayed through the

@@ -60,7 +60,7 @@ describe("parseAgentDefinition", () => {
 describe("applyAgentDefinition", () => {
   const agent = parseAgentDefinition("reviewer", REVIEWER)!;
 
-  it("leads with the instructions and yields to what the caller passed", () => {
+  it("applies the agent's defaults, leaves the task as asked, and yields to the caller", () => {
     const requested: OrchestratorMcpDelegateTaskInput = {
       task: "Review PR 12",
       agent: "reviewer",
@@ -69,7 +69,6 @@ describe("applyAgentDefinition", () => {
     };
     expect(applyAgentDefinition(requested, agent)).toStrictEqual({
       ...requested,
-      task: "Review the change. Report bugs only.\n\nReview PR 12",
       runtimeMode: "approval-required",
       isolation: "worktree",
     });

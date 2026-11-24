@@ -68,7 +68,8 @@ this environment only, not in a linked one.
 
 To talk to an agent directly instead of asking for a delegation, pick it in the
 agent menu beside **Attach** in the web or desktop composer. **Default** is the usual chat. Each
-thread remembers its pick, and the agent answers in that same thread.
+thread remembers its pick, and the agent answers in that same thread. A thread an agent was
+delegated to opens with that agent picked, so a follow-up you send there goes to it.
 
 Picking an agent switches the composer to the agent's provider, model, and options,
 and you can still change them. Its instructions go to the provider with your next

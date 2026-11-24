@@ -2,7 +2,11 @@ import type { EnvironmentId, ProjectAgent, ScopedThreadRef } from "@t3tools/cont
 import { useGT } from "gt-react";
 import { BotIcon, ChevronUpIcon } from "lucide-react";
 
-import { setComposerAgent, useComposerAgent } from "../../composerAgentStore";
+import {
+  resolveComposerAgent,
+  setComposerAgent,
+  useComposerAgentPick,
+} from "../../composerAgentStore";
 import { useServerConfigs } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentQuery } from "../../state/query";
@@ -26,6 +30,8 @@ export function ComposerAgentPicker(props: {
   readonly environmentId: EnvironmentId;
   readonly thread: ScopedThreadRef;
   readonly cwd: string | null;
+  /** The agent of the thread's latest message, shown until this device picks one. */
+  readonly threadAgent: string | null;
   readonly onPickAgent: (agent: ProjectAgent) => void;
 }) {
   const gt = useGT();
@@ -40,7 +46,7 @@ export function ComposerAgentPicker(props: {
           })
         : null,
     ).data?.agents ?? [];
-  const selected = useComposerAgent(props.thread);
+  const selected = resolveComposerAgent(useComposerAgentPick(props.thread), props.threadAgent);
   if (!supported || (agents.length === 0 && selected === null)) return null;
   const label = selected ?? gt("Default", { $context: "the usual chat, with no named agent" });
   return (

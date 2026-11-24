@@ -10160,6 +10160,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         messageId: childMessageId,
         text: command.task,
         attachments: [],
+        ...(command.agent === undefined
+          ? {}
+          : { context: { version: 1 as const, agent: command.agent, records: [] } }),
         modelSelection: command.modelSelection,
         dispatchMode:
           command.workspaceStrategy === undefined

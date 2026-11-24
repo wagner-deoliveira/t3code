@@ -6,23 +6,20 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { resolveStorage } from "./lib/storage";
 
 interface ComposerAgentStore {
-  /** Per thread, the named agent its messages go to. Absent means Default. */
-  readonly agentByThread: Readonly<Record<string, string>>;
+  /** Per thread, the agent the user picked here; null is an explicit Default. */
+  readonly agentByThread: Readonly<Record<string, string | null>>;
   readonly setAgent: (thread: ScopedThreadRef, agent: string | null) => void;
 }
 
-// A draft keeps its thread id when it is sent, so the choice carries over to the new thread.
+// A draft keeps its thread id when it is sent, so the pick carries over to the new thread.
 const useComposerAgentStore = create<ComposerAgentStore>()(
   persist(
     (set) => ({
       agentByThread: {},
       setAgent: (thread, agent) =>
-        set((state) => {
-          const { [scopedThreadKey(thread)]: _previous, ...rest } = state.agentByThread;
-          return {
-            agentByThread: agent === null ? rest : { ...rest, [scopedThreadKey(thread)]: agent },
-          };
-        }),
+        set((state) => ({
+          agentByThread: { ...state.agentByThread, [scopedThreadKey(thread)]: agent },
+        })),
     }),
     {
       name: "t3code:composer-agents:v1",
@@ -33,14 +30,25 @@ const useComposerAgentStore = create<ComposerAgentStore>()(
   ),
 );
 
-export function useComposerAgent(thread: ScopedThreadRef | null): string | null {
+/**
+ * The agent the thread's next message goes to: this device's pick, else the agent of the
+ * thread's latest message, so a delegated child or another device's pick shows as is.
+ */
+export function resolveComposerAgent(
+  pick: string | null | undefined,
+  threadAgent: string | null,
+): string | null {
+  return pick === undefined ? threadAgent : pick;
+}
+
+export function useComposerAgentPick(thread: ScopedThreadRef | null): string | null | undefined {
   return useComposerAgentStore((state) =>
-    thread === null ? null : (state.agentByThread[scopedThreadKey(thread)] ?? null),
+    thread === null ? undefined : state.agentByThread[scopedThreadKey(thread)],
   );
 }
 
-export function readComposerAgent(thread: ScopedThreadRef): string | null {
-  return useComposerAgentStore.getState().agentByThread[scopedThreadKey(thread)] ?? null;
+export function readComposerAgentPick(thread: ScopedThreadRef): string | null | undefined {
+  return useComposerAgentStore.getState().agentByThread[scopedThreadKey(thread)];
 }
 
 export function setComposerAgent(thread: ScopedThreadRef, agent: string | null): void {
